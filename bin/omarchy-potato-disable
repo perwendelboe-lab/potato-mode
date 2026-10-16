@@ -28,6 +28,13 @@ if (( ! yes && ! POTATO_DRY_RUN )) && [[ -t 0 ]] && have gum; then
   gum confirm "Disable potato mode and restore Omarchy defaults?" || exit 0
 fi
 
+# Optional local-AI module goes first (it lives under the state dir).
+if [[ -f $POTATO_STATE/ai/enabled || -d $POTATO_DATA_HOME/potato-mode/ai ]]; then
+  ai_args=(disable)
+  (( POTATO_DRY_RUN )) && ai_args+=(--dry-run)
+  "$POTATO_ROOT/bin/omarchy-potato-ai" "${ai_args[@]}" || warn "local AI module could not be removed"
+fi
+
 # Hook first, so an update mid-revert doesn't re-apply.
 hook="$POTATO_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
 [[ -f $hook ]] && run rm -f -- "$hook"
@@ -47,6 +54,11 @@ while IFS= read -r f; do
     run rm -f -- "$f"
   fi
 done < <(state_list written.list)
+
+# Symlinks we created (agent skills).
+while IFS= read -r f; do
+  [[ -n $f && -L $f ]] && run rm -f -- "$f"
+done < <(state_list links.list)
 
 # Root files.
 while IFS= read -r f; do

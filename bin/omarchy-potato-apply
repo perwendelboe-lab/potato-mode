@@ -150,5 +150,21 @@ have xdg-settings && run xdg-settings set default-web-browser firefox.desktop 2>
 hook="$POTATO_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
 write_if_changed "$hook" <"$POTATO_ROOT/hooks/post-update" && { run chmod 755 "$hook"; say "post-update hook installed"; }
 
+# 11. Agent skills for Codex (and other agents reading ~/.agents/skills): Omarchy's own skill + potato addendum.
+skills_dir="$HOME/.agents/skills"
+omarchy_skill=""
+for d in "${OMARCHY_PATH:-$POTATO_SYSROOT/usr/share/omarchy}/default/agents/skills/omarchy" "$POTATO_DATA_HOME/omarchy/default/agents/skills/omarchy"; do
+  [[ -f $d/SKILL.md ]] && { omarchy_skill=$d; break; }
+done
+if [[ -n $omarchy_skill && ! -e $skills_dir/omarchy && ! -L $skills_dir/omarchy ]]; then
+  run mkdir -p "$skills_dir"
+  run ln -s "$omarchy_skill" "$skills_dir/omarchy"
+  state_add links.list "$skills_dir/omarchy"
+  say "Omarchy skill linked for Codex: $skills_dir/omarchy"
+elif [[ -z $omarchy_skill ]]; then
+  warn "Omarchy skill not found; Codex will run without it"
+fi
+write_if_changed "$skills_dir/potato-mode/SKILL.md" <"$POTATO_SHARE/skills/potato-mode/SKILL.md" && say "potato-mode skill installed"
+
 (( POTATO_DRY_RUN )) || date -Is >"$POTATO_STATE/applied-at"
 if (( POTATO_DRY_RUN )); then say "dry run complete, nothing changed"; else say "applied"; fi

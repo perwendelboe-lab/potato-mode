@@ -58,3 +58,19 @@ Consequence: prompt processing is the bottleneck. The full Omarchy SKILL.md (~3k
 3. Runtime: build the PrismML fork on the target (slow on a Core 2: tens of minutes) **vs** ship a prebuilt `-march=core2` binary from potato-mode (fast install, but we maintain it). Recommended: prebuilt binary, with a build-from-source fallback.
 4. Model: Bonsai-2-2B **PTQ1_0** (smallest and fastest here). The fallback is Q2_0 on upstream llama.cpp if the fork goes stale; it is 2.5× slower and +110 MiB.
 5. Do **not** include sybil-solutions/omarchy-local-ai (AVX2/Docker/4 GB/telemetry).
+
+## 6. Implementation (branch `local-ai`)
+Decisions taken on 2026-10-16: the skill ships in the base, the module is opt-in and needs ≥2 GB, the build runs on the target from a pinned commit, the model is Bonsai-2-2B PTQ1_0, Q2_0 on upstream is the fallback, and omarchy-local-ai is dropped.
+
+- **Base (`omarchy-potato apply`)** symlinks Omarchy's skill (`$OMARCHY_PATH/default/agents/skills/omarchy`) to `~/.agents/skills/omarchy` if nothing is already there. It writes the `potato-mode` addendum skill (`share/potato-mode/skills/potato-mode/SKILL.md`). `disable` removes both, and also removes the AI module if present.
+- **`omarchy-potato ai enable|disable|status [--dry-run] [--yes] [--fallback]`** (`bin/omarchy-potato-ai`, pins in `share/potato-mode/ai/pins.sh`):
+  - *Preflight:* MemTotal ≥ 1,800,000 kB (a "2 GB" machine), SSE3, ≥1.5 GB free disk, toolchain (installs `base-devel cmake git curl jq` after a confirm), and reachability of the pinned repo and model URL.
+  - *Build:* `git fetch --depth 1 <url> <commit>`, then verify `HEAD == pin`. cmake uses `GGML_NATIVE=OFF`. Each of AVX/AVX2/FMA/F16C/BMI2/SSE4.2 is ON only if `/proc/cpuinfo` lists it, with `-march=core2` for SSSE3 CPUs and AVX512 always off. The build runs `nice -n 19 ionice -c3`, `-j1` (or `-j2` at ≥3.5 GB) under `timeout 6h`, logged to `~/.local/state/potato-mode/ai/logs/build-*.log`. Only the `llama-server` target is built.
+  - *Model:* resumable `curl -C -` into `.part` from the pinned HF revision. The SHA-256 must match before the file is moved into place.
+  - *Smoke test:* `llama-server --version` (this catches illegal instructions), then load the model, get a 4-token chat completion, and check peak VmHWM ≤ 900,000 kB.
+  - *On failure:* the step, message and log path go to `last-build` (shown by `ai status`), and the module stays disabled. Fetched source with a wrong commit, a bad-checksum model or a crashing binary is deleted. Interrupted downloads and partial builds are kept so a retry resumes. The error message offers a retry and `--fallback`. Base potato-mode files are never touched.
+- **`omarchy-potato-ask "<question>"`** (also `omarchy-potato ask`):
+  - It starts llama-server on demand on 127.0.0.1:12480 (`-c 2048`, nice 10) and sends the ≤500-token mini-skill (`share/potato-mode/ai/mini-skill.md`) with thinking off, max 256 tokens, and one `run` tool.
+  - Each proposed command is shown and runs **only after confirmation**. `--dry-run` never runs anything.
+  - A watchdog stops the server after 600 s idle (`POTATO_AI_IDLE`). `--stop` stops it now.
+- **Tests (`tests/run.sh`, stubbed git/cmake/curl/server):** RAM refusal, dry-run without changes, no AVX on Core 2 flags, AVX2 only when present, the success path, disable, every failure path (network, toolchain, disk, wrong commit, build error, timeout, checksum, interrupted download, illegal instruction, RSS limit, no generation), resume without re-fetch, `--fallback`, ask confirm/deny/dry-run/thinking-off, and the mini-skill token budget.

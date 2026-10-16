@@ -1,0 +1,111 @@
+#!/bin/bash
+
+# omarchy:summary=Ask the local AI an Omarchy question; it may propose commands, which run only after you confirm
+# omarchy:group=potato
+# omarchy:name=ask
+# omarchy:args=[--dry-run] [--yes] [--stop] "<question>"
+# omarchy:examples=omarchy-potato-ask "turn on night light"
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+AI_STATE=$POTATO_STATE/ai
+PORT=${POTATO_AI_PORT:-12480}
+IDLE=${POTATO_AI_IDLE:-600}
+START_WAIT=${POTATO_AI_START_WAIT:-180}
+URL=http://127.0.0.1:$PORT
+pidfile=$AI_STATE/server.pid
+stamp=$AI_STATE/last-used
+
+server_alive() { [[ -f $pidfile ]] && kill -0 "$(<"$pidfile")" 2>/dev/null; }
+
+stop_server() {
+  if server_alive; then kill "$(<"$pidfile")" 2>/dev/null || true; fi
+  rm -f -- "$pidfile"
+}
+
+# Background loop: stop the server once it has been idle for $IDLE seconds.
+watchdog() {
+  while server_alive; do
+    sleep "${POTATO_AI_WATCH_EVERY:-30}"
+    local last now
+    last=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    if (( now - last >= IDLE )); then stop_server; break; fi
+  done
+}
+
+start_server() {
+  local server model threads
+  server=$(sed -n 's/^server=//p' "$AI_STATE/enabled")
+  model=$(sed -n 's/^model=//p' "$AI_STATE/enabled")
+  [[ -x $server && -f $model ]] || die "local AI files are missing; re-run: omarchy-potato ai enable"
+  threads=$(nproc 2>/dev/null || echo 2)
+  say "starting local model (first answer can take a minute on old hardware)"
+  setsid nice -n 10 "$server" -m "$model" --host 127.0.0.1 --port "$PORT" -c 2048 -t "$threads" --jinja \
+    --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 1.5 \
+    >"$AI_STATE/server.log" 2>&1 </dev/null &
+  echo $! >"$pidfile"
+  local i
+  for (( i = 0; i < START_WAIT; i++ )); do
+    curl -fs --max-time 2 "$URL/health" >/dev/null 2>&1 && break
+    server_alive || die "local model failed to start; see $AI_STATE/server.log"
+    sleep 1
+  done
+  curl -fs --max-time 2 "$URL/health" >/dev/null 2>&1 || { stop_server; die "local model did not become ready in ${START_WAIT}s; see $AI_STATE/server.log"; }
+  setsid "$0" --watchdog >/dev/null 2>&1 </dev/null &
+}
+
+confirm() {
+  (( yes )) && return 0
+  if [[ -t 0 ]] && have gum; then gum confirm "$1"; return; fi
+  local a
+  read -r -p "$1 [y/N] " a || return 1
+  [[ $a == [yY]* ]]
+}
+
+yes=0 question=""
+for arg in "$@"; do
+  case $arg in
+    --watchdog) watchdog; exit 0 ;;
+    --stop) stop_server; exit 0 ;;
+    --dry-run) POTATO_DRY_RUN=1 ;;
+    --yes) yes=1 ;;
+    -*) die "unknown option: $arg" ;;
+    *) question+="${question:+ }$arg" ;;
+  esac
+done
+[[ -n $question ]] || die 'usage: omarchy-potato-ask [--dry-run] [--yes] "<question>"'
+[[ -f $AI_STATE/enabled ]] || die "local AI is not enabled (needs >= 2 GB RAM): omarchy-potato ai enable"
+have jq || die "jq is required"
+
+if [[ -z ${POTATO_AI_NO_SERVER:-} ]] && ! curl -fs --max-time 2 "$URL/health" >/dev/null 2>&1; then
+  start_server
+fi
+touch "$stamp"
+
+request=$(jq -nc --rawfile sys "$POTATO_SHARE/ai/mini-skill.md" --arg q "$question" '{
+  messages: [{role: "system", content: $sys}, {role: "user", content: $q}],
+  tools: [{type: "function", function: {name: "run", description: "Run one shell command after the user confirms",
+    parameters: {type: "object", properties: {cmd: {type: "string"}}, required: ["cmd"]}}}],
+  chat_template_kwargs: {enable_thinking: false}, max_tokens: 256, temperature: 0.7
+}')
+reply=$(curl -fs --max-time "${POTATO_AI_TIMEOUT:-600}" "$URL/v1/chat/completions" -H 'Content-Type: application/json' -d "$request") \
+  || die "no answer from the local model; see $AI_STATE/server.log"
+touch "$stamp"
+
+text=$(jq -r '.choices[0].message.content // ""' <<<"$reply")
+[[ -n $text ]] && printf '%s\n' "$text"
+mapfile -t cmds < <(jq -r '.choices[0].message.tool_calls[]?.function.arguments | (fromjson? // {}) | .cmd // empty' <<<"$reply")
+for c in "${cmds[@]}"; do
+  [[ -n $c ]] || continue
+  echo "proposed: $c"
+  if (( POTATO_DRY_RUN )); then echo "DRY-RUN: not running"; continue; fi
+  if confirm "Run this command?"; then
+    bash -c "$c" || warn "command exited with $?"
+  else
+    echo "skipped"
+  fi
+done
+exit 0

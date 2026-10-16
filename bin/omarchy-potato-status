@@ -18,6 +18,7 @@ echo "detected:    $("$POTATO_ROOT/bin/omarchy-potato-detect" --verbose 2>&1)"
 "$POTATO_ROOT/bin/omarchy-potato-check" 2>&1 || true
 echo "dropped:     $(state_list dropped.list | paste -sd' ')"
 echo "added:       $(state_list added.list | paste -sd' ')"
+"$POTATO_ROOT/bin/omarchy-potato-ai" status 2>&1 | sed "s/^/  /" || true
 free -m 2>/dev/null | sed 's/^/  /'
 have zramctl && zramctl 2>/dev/null | sed 's/^/  /'
 exit 0

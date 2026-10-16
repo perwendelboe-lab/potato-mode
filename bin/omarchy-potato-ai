@@ -1,0 +1,258 @@
+#!/bin/bash
+
+# omarchy:summary=Optional local AI (Bonsai-2-2B on a PrismML llama.cpp build); off by default, needs >= 2 GB RAM
+# omarchy:group=potato
+# omarchy:name=ai
+# omarchy:args=<enable|disable|status> [--dry-run] [--yes] [--fallback]
+# omarchy:examples=omarchy potato ai enable --dry-run
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+# shellcheck source=../share/potato-mode/ai/pins.sh
+source "$POTATO_SHARE/ai/pins.sh"
+
+AI_HOME=${POTATO_AI_HOME:-$POTATO_DATA_HOME/potato-mode/ai}
+AI_STATE=$POTATO_STATE/ai
+MEMINFO=${POTATO_MEMINFO:-/proc/meminfo}
+CPUINFO=${POTATO_CPUINFO:-/proc/cpuinfo}
+BUILD_TIMEOUT=${POTATO_AI_BUILD_TIMEOUT:-6h}
+SMOKE_TIMEOUT=${POTATO_AI_SMOKE_TIMEOUT:-600}
+
+sub=${1:-status}
+shift || true
+yes=0 fallback=0
+for arg in "$@"; do
+  case $arg in
+    --dry-run) POTATO_DRY_RUN=1 ;;
+    --yes) yes=1 ;;
+    --fallback) fallback=1 ;;
+    *) die "unknown option: $arg" ;;
+  esac
+done
+export POTATO_DRY_RUN
+
+if (( fallback )); then
+  variant=upstream-q2_0 src_url=$POTATO_AI_UPSTREAM_URL src_commit=$POTATO_AI_UPSTREAM_COMMIT
+  model_file=$POTATO_AI_FALLBACK_FILE model_sha=$POTATO_AI_FALLBACK_SHA256
+else
+  variant=prism-ptq1_0 src_url=$POTATO_AI_FORK_URL src_commit=$POTATO_AI_FORK_COMMIT
+  model_file=$POTATO_AI_MODEL_FILE model_sha=$POTATO_AI_MODEL_SHA256
+fi
+model_url="https://huggingface.co/$POTATO_AI_MODEL_REPO/resolve/$POTATO_AI_MODEL_REV/$model_file"
+src_dir=$AI_HOME/src-$variant
+build_dir=$src_dir/build
+models_dir=$AI_HOME/models
+log=""
+step=""
+
+mem_kb() { awk '/^MemTotal:/ { print $2 }' "$MEMINFO"; }
+cpu_has() { grep -m1 '^flags' "$CPUINFO" | grep -qw -- "$1"; }
+
+record() { # key=value lines into last-build
+  (( POTATO_DRY_RUN )) && return 0
+  mkdir -p "$AI_STATE"
+  printf '%s\n' "$@" >"$AI_STATE/last-build"
+}
+
+fail() {
+  local msg="$1"
+  trap - ERR
+  echo "potato: error: local AI $step failed: $msg" >&2
+  [[ -n $log ]] && echo "potato: log: $log" >&2
+  record "result=failed" "step=$step" "variant=$variant" "time=$(date -Is)" "log=$log" "message=$msg"
+  rm -f -- "$AI_STATE/enabled"
+  echo "potato: the module stays disabled; base potato-mode is untouched." >&2
+  echo "potato: retry: omarchy-potato ai enable   (completed steps are kept and resumed)" >&2
+  (( fallback )) || echo "potato: fallback: omarchy-potato ai enable --fallback   (upstream llama.cpp + Q2_0, slower)" >&2
+  exit 1
+}
+on_err() { fail "command failed (exit $?): ${BASH_COMMAND}"; }
+
+# Run a long step at low priority, logged.
+lowprio() {
+  local pre=()
+  have nice && pre+=(nice -n 19)
+  have ionice && pre+=(ionice -c 3)
+  run "${pre[@]}" "$@"
+}
+
+cmake_flags() {
+  local f=(-DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF
+    -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DGGML_AVX512=OFF)
+  # Enable only what /proc/cpuinfo reports; never assume AVX.
+  local opt flag
+  for opt in AVX:avx AVX2:avx2 FMA:fma F16C:f16c BMI2:bmi2 SSE42:sse4_2; do
+    flag=${opt#*:}
+    if cpu_has "$flag"; then f+=("-DGGML_${opt%%:*}=ON"); else f+=("-DGGML_${opt%%:*}=OFF"); fi
+  done
+  local march=-march=x86-64
+  cpu_has ssse3 && march="-march=core2"
+  cpu_has avx && march="-march=x86-64-v2 -mavx"
+  cpu_has avx2 && march="-march=x86-64-v3"
+  f+=("-DCMAKE_C_FLAGS=$march" "-DCMAKE_CXX_FLAGS=$march")
+  printf '%s\n' "${f[@]}"
+}
+
+jobs_for_ram() { if (( $(mem_kb) >= 3500000 )); then echo 2; else echo 1; fi; }
+
+preflight() {
+  step=preflight
+  [[ $(uname -m) == x86_64 || -n ${POTATO_CPUINFO:-} ]] || fail "x86_64 only"
+  local kb; kb=$(mem_kb)
+  [[ -n $kb ]] || fail "cannot read MemTotal from $MEMINFO"
+  (( kb >= POTATO_AI_MIN_KB )) || fail "needs >= 2 GB RAM (MemTotal ${kb} kB < ${POTATO_AI_MIN_KB} kB); the base potato-mode works without it"
+  cpu_has sse3 || cpu_has pni || fail "CPU lacks SSE3"
+  say "CPU: $(for x in ssse3 sse4_1 sse4_2 avx avx2; do cpu_has "$x" && printf '%s ' "$x"; done)(no AVX assumed)"
+  run mkdir -p "$AI_HOME"
+  local free_kb
+  free_kb=$(df -Pk "$( [[ -d $AI_HOME ]] && echo "$AI_HOME" || echo "$POTATO_DATA_HOME")" 2>/dev/null | awk 'NR==2 {print $4}')
+  [[ -n $free_kb ]] || free_kb=0
+  (( free_kb >= POTATO_AI_MIN_FREE_KB )) || fail "not enough free disk under $AI_HOME (${free_kb} kB < ${POTATO_AI_MIN_FREE_KB} kB)"
+  local missing=() t
+  for t in ${POTATO_AI_TOOLS:-cc c++ cmake git make curl jq sha256sum timeout}; do have "$t" || missing+=("$t"); done
+  if (( ${#missing[@]} )); then
+    say "missing toolchain: ${missing[*]}; installing ${POTATO_AI_BUILD_DEPS[*]}"
+    if (( ! yes && ! POTATO_DRY_RUN )) && [[ -t 0 ]] && have gum; then
+      gum confirm "Install build tools (${POTATO_AI_BUILD_DEPS[*]})?" || fail "toolchain missing: ${missing[*]}"
+    fi
+    pkg_add "${POTATO_AI_BUILD_DEPS[@]}" || fail "could not install build tools"
+    (( POTATO_DRY_RUN )) || for t in "${missing[@]}"; do have "$t" || fail "toolchain still missing: $t"; done
+  fi
+  # Network: the pinned commit and model must be reachable.
+  if (( ! POTATO_DRY_RUN )); then
+    git ls-remote "$src_url" >/dev/null 2>&1 || fail "cannot reach $src_url"
+    curl -fsIL --max-time 30 "$model_url" >/dev/null || fail "cannot reach $model_url"
+  fi
+}
+
+fetch_source() {
+  step=fetch-source
+  if [[ -f $src_dir/.potato-commit && $(<"$src_dir/.potato-commit") == "$src_commit" ]]; then
+    say "source $src_commit already present"; return 0
+  fi
+  run rm -rf -- "$src_dir"
+  run mkdir -p "$src_dir"
+  run git -C "$src_dir" init -q
+  run git -C "$src_dir" fetch -q --depth 1 "$src_url" "$src_commit" >>"$log" 2>&1 || { run rm -rf -- "$src_dir"; fail "could not fetch $src_url@$src_commit"; }
+  run git -C "$src_dir" checkout -q FETCH_HEAD
+  if (( ! POTATO_DRY_RUN )); then
+    [[ $(git -C "$src_dir" rev-parse HEAD) == "$src_commit" ]] || { rm -rf -- "$src_dir"; fail "checked-out commit does not match pin $src_commit"; }
+    echo "$src_commit" >"$src_dir/.potato-commit"
+  fi
+}
+
+build() {
+  step=build
+  local -a flags; mapfile -t flags < <(cmake_flags)
+  local j; j=$(jobs_for_ram)
+  say "configuring (${flags[*]})"
+  lowprio cmake -S "$src_dir" -B "$build_dir" "${flags[@]}" >>"$log" 2>&1 || fail "cmake configure failed"
+  say "building llama-server with -j$j at low priority (timeout $BUILD_TIMEOUT); this can take an hour on a Core 2"
+  lowprio timeout "$BUILD_TIMEOUT" cmake --build "$build_dir" -j "$j" --target llama-server >>"$log" 2>&1 || {
+    local rc=$?
+    (( rc == 124 )) && fail "build timed out after $BUILD_TIMEOUT (re-run to resume)"
+    fail "build failed (exit $rc); partial objects kept so a retry resumes"
+  }
+  (( POTATO_DRY_RUN )) || [[ -x $build_dir/bin/llama-server ]] || fail "llama-server binary missing after build"
+}
+
+fetch_model() {
+  step=fetch-model
+  local dest=$models_dir/$model_file
+  if [[ -f $dest ]] && [[ $(sha256sum "$dest" | cut -d' ' -f1) == "$model_sha" ]]; then
+    say "model $model_file already verified"; return 0
+  fi
+  run mkdir -p "$models_dir"
+  say "downloading $model_file (resumable)"
+  run curl -fL --retry 3 -C - -o "$dest.part" "$model_url" >>"$log" 2>&1 || fail "download failed; partial file kept for resume: $dest.part"
+  (( POTATO_DRY_RUN )) && return 0
+  local got; got=$(sha256sum "$dest.part" | cut -d' ' -f1)
+  if [[ $got != "$model_sha" ]]; then
+    rm -f -- "$dest.part"
+    fail "checksum mismatch for $model_file (got $got, want $model_sha); partial file removed"
+  fi
+  mv -- "$dest.part" "$dest"
+}
+
+# Load the model, generate a few tokens, measure peak RSS.
+smoke() {
+  step=smoke-test
+  (( POTATO_DRY_RUN )) && { say "would smoke-test $build_dir/bin/llama-server"; return 0; }
+  local bin=$build_dir/bin/llama-server port=$(( 18000 + RANDOM % 1000 )) pid peak=0 hwm i ok=0
+  "$bin" --version >>"$log" 2>&1 || { rm -f -- "$bin"; fail "binary does not run (illegal instruction? see log); removed it"; }
+  "$bin" -m "$models_dir/$model_file" --host 127.0.0.1 --port "$port" -c 512 -t 2 --jinja >>"$log" 2>&1 &
+  pid=$!
+  for (( i = 0; i < SMOKE_TIMEOUT; i++ )); do
+    kill -0 "$pid" 2>/dev/null || break
+    hwm=$(awk '/^VmHWM:/ {print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
+    (( ${hwm:-0} > peak )) && peak=$hwm
+    if curl -fs --max-time 120 "http://127.0.0.1:$port/v1/chat/completions" -H 'Content-Type: application/json' \
+      -d '{"messages":[{"role":"user","content":"Say OK."}],"max_tokens":4,"chat_template_kwargs":{"enable_thinking":false}}' 2>>"$log" \
+      | jq -e '.choices[0].message' >/dev/null 2>&1; then
+      ok=1
+      hwm=$(awk '/^VmHWM:/ {print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
+      (( ${hwm:-0} > peak )) && peak=$hwm
+      break
+    fi
+    sleep 1
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  echo "smoke: ok=$ok peak_rss_kb=$peak" >>"$log"
+  (( ok )) || fail "model did not load or generate within ${SMOKE_TIMEOUT}s"
+  (( peak <= POTATO_AI_RSS_LIMIT_KB )) || fail "peak RSS ${peak} kB exceeds limit ${POTATO_AI_RSS_LIMIT_KB} kB"
+  smoke_rss=$peak
+}
+
+do_enable() {
+  (( POTATO_DRY_RUN )) || mkdir -p "$AI_STATE/logs"
+  log=$AI_STATE/logs/build-$(date +%Y%m%d-%H%M%S).log
+  (( POTATO_DRY_RUN )) && log=/dev/stdout
+  trap on_err ERR
+  preflight
+  if (( ! yes && ! POTATO_DRY_RUN )) && [[ -t 0 ]] && have gum; then
+    gum confirm "Build local AI ($variant) on this machine? Low priority, may take an hour, ~1.5 GB disk." || exit 0
+  fi
+  smoke_rss=0
+  fetch_source
+  build
+  fetch_model
+  smoke
+  trap - ERR
+  if (( POTATO_DRY_RUN )); then say "dry run complete, nothing changed"; return 0; fi
+  printf 'variant=%s\nserver=%s\nmodel=%s\n' "$variant" "$build_dir/bin/llama-server" "$models_dir/$model_file" >"$AI_STATE/enabled"
+  record "result=ok" "step=done" "variant=$variant" "time=$(date -Is)" "log=$log" "peak_rss_kb=$smoke_rss"
+  say "local AI enabled ($variant, smoke-test peak RSS ${smoke_rss} kB). Try: omarchy-potato-ask \"switch to the nord theme\""
+}
+
+do_disable() {
+  "$POTATO_ROOT/bin/omarchy-potato-ask" --stop >/dev/null 2>&1 || true
+  [[ -f $AI_STATE/enabled ]] && run rm -f -- "$AI_STATE/enabled"
+  [[ -d $AI_HOME ]] && run rm -rf -- "$AI_HOME"
+  say "local AI disabled and its build/model files removed (build tools left installed)"
+}
+
+do_status() {
+  if [[ -f $AI_STATE/enabled ]]; then
+    echo "local ai:    enabled ($(sed -n 's/^variant=//p' "$AI_STATE/enabled"))"
+  else
+    echo "local ai:    disabled"
+  fi
+  if [[ -f $AI_STATE/last-build ]]; then
+    echo "last build:  $(paste -sd' ' "$AI_STATE/last-build")"
+  else
+    echo "last build:  never"
+  fi
+  local kb; kb=$(mem_kb)
+  if (( kb >= POTATO_AI_MIN_KB )); then echo "ram:         ${kb} kB (ok)"; else echo "ram:         ${kb} kB (below 2 GB; module unavailable)"; fi
+  [[ -f $AI_STATE/server.pid ]] && kill -0 "$(<"$AI_STATE/server.pid")" 2>/dev/null && echo "server:      running (pid $(<"$AI_STATE/server.pid"))"
+  return 0
+}
+
+case $sub in
+  enable) do_enable ;;
+  disable) do_disable ;;
+  status) do_status ;;
+  *) die "usage: omarchy-potato ai <enable|disable|status> [--dry-run] [--yes] [--fallback]" ;;
+esac

@@ -150,6 +150,166 @@ out=$(POTATO_MENU_SHIPPED=/workspace/ref/omarchy/default/omarchy/omarchy-menu.js
 [[ -f /workspace/ref/omarchy/default/omarchy/omarchy-menu.jsonc ]] && check "menu parses real Omarchy menu (if ref clone present)" grep -q "^setup" <<<"$out"
 teardown
 
+# --- base: Omarchy skill linked for Codex
+setup
+mkdir -p "$POTATO_SYSROOT/usr/share/omarchy/default/agents/skills/omarchy"
+echo "---" >"$POTATO_SYSROOT/usr/share/omarchy/default/agents/skills/omarchy/SKILL.md"
+"$repo/bin/omarchy-potato-enable" --yes >/dev/null 2>&1
+check "omarchy skill symlinked into ~/.agents/skills" test -L "$HOME/.agents/skills/omarchy"
+check "potato-mode skill installed" test -f "$HOME/.agents/skills/potato-mode/SKILL.md"
+"$repo/bin/omarchy-potato-disable" --yes >/dev/null 2>&1
+check "disable removes skill link and addendum" bash -c "[ ! -e '$HOME/.agents/skills/omarchy' ] && [ ! -e '$HOME/.agents/skills/potato-mode/SKILL.md' ]"
+teardown
+
+# --- local AI module
+ai_setup() {
+  setup
+  export POTATO_MEMINFO=$T/meminfo POTATO_CPUINFO=$T/cpuinfo POTATO_AI_MIN_FREE_KB=0 POTATO_AI_SMOKE_TIMEOUT=20
+  echo "MemTotal:        2010000 kB" >"$POTATO_MEMINFO"
+  echo "flags		: fpu sse sse2 pni ssse3 lm" >"$POTATO_CPUINFO"
+  printf 'fake-model' >"$T/model.bin"
+  export POTATO_AI_MODEL_SHA256; POTATO_AI_MODEL_SHA256=$(sha256sum "$T/model.bin" | cut -d' ' -f1)
+  export FAKE_MODEL=$T/model.bin FAKE_DEFAULT_REPLY=$T/reply-ok.json
+  echo '{"choices":[{"message":{"content":"OK"}}]}' >"$FAKE_DEFAULT_REPLY"
+  for c in cc c++ make; do printf '#!/bin/bash\nexit 0\n' >"$T/stubs/$c"; done
+  cat >"$T/stubs/git" <<'S'
+#!/bin/bash
+echo "git $*" >>"$STUBLOG"
+[[ $1 == ls-remote ]] && exit "${FAKE_GIT_RC:-0}"
+[[ $1 == -C ]] && shift 2
+case $1 in
+  fetch) exit "${FAKE_GIT_RC:-0}" ;;
+  rev-parse) echo "${FAKE_REV:-5ae2e169eac202d2f065606539c3ad6ab8b51333}" ;;
+esac
+exit 0
+S
+  cat >"$T/stubs/cmake" <<'S'
+#!/bin/bash
+echo "cmake $*" >>"$STUBLOG"
+if [[ $1 == --build ]]; then
+  [[ -n ${FAKE_BUILD_RC:-} ]] && exit "$FAKE_BUILD_RC"
+  mkdir -p "$2/bin"
+  printf '#!/bin/bash\n[[ $1 == --version ]] && { [[ -n ${FAKE_SERVER_BROKEN:-} ]] && exit 132; echo fake; exit 0; }\nexec sleep 30\n' >"$2/bin/llama-server"
+  chmod +x "$2/bin/llama-server"
+fi
+exit "${FAKE_CONF_RC:-0}"
+S
+  cat >"$T/stubs/curl" <<'S'
+#!/bin/bash
+echo "curl $*" >>"$STUBLOG"
+args="$*"
+if [[ $args == *-o* ]]; then
+  [[ -n ${FAKE_DL_RC:-} ]] && exit "$FAKE_DL_RC"
+  while (( $# )); do [[ $1 == -o ]] && { cp "$FAKE_MODEL" "$2"; break; }; shift; done; exit 0
+fi
+[[ $args == *-fsIL* ]] && exit "${FAKE_NET_RC:-0}"
+[[ $args == */health* ]] && exit 0
+if [[ $args == *chat/completions* ]]; then
+  [[ -n ${FAKE_CHAT_FAIL:-} ]] && exit 7
+  cat "${FAKE_REPLY_FILE:-$FAKE_DEFAULT_REPLY}"; exit 0
+fi
+exit 0
+S
+  chmod +x "$T/stubs/"*
+  AIST=$XDG_STATE_HOME/potato-mode/ai
+}
+
+ai_setup
+echo "MemTotal:        1010000 kB" >"$POTATO_MEMINFO"
+out=$("$repo/bin/omarchy-potato-ai" enable --yes 2>&1); rc=$?
+check "ai refuses < 2 GB RAM" bash -c "[ $rc -ne 0 ] && grep -q '2 GB' <<<'$out'"
+check "ai refusal leaves module disabled" test ! -e "$AIST/enabled"
+check "ai status shows failed preflight" bash -c "'$repo/bin/omarchy-potato-ai' status | grep -q 'result=failed step=preflight'"
+teardown
+
+ai_setup
+before=$(snapshot)
+out=$("$repo/bin/omarchy-potato-ai" enable --dry-run 2>&1); rc=$?
+check "ai dry-run succeeds" [ $rc -eq 0 ]
+check "ai dry-run changes no files" [ "$before" = "$(snapshot)" ]
+check "ai dry-run: no AVX on a Core 2 cpuinfo" bash -c "grep -q 'GGML_AVX=OFF' <<<'$out' && grep -q 'GGML_AVX2=OFF' <<<'$out' && grep -q 'march=core2' <<<'$out' && ! grep -q 'AVX=ON' <<<'$out'"
+check "ai dry-run: low priority and -j1 at 2 GB" bash -c "grep -q 'nice -n 19' <<<'$out' && grep -q -- '-j 1' <<<'$out'"
+check "ai dry-run uses pinned commit" grep -q 5ae2e169eac202d2f065606539c3ad6ab8b51333 <<<"$out"
+teardown
+
+ai_setup
+echo "flags		: fpu sse sse2 pni ssse3 avx avx2 fma f16c" >"$POTATO_CPUINFO"
+out=$("$repo/bin/omarchy-potato-ai" enable --dry-run 2>&1)
+check "ai enables AVX2 only when cpuinfo has it" grep -q 'GGML_AVX2=ON' <<<"$out"
+teardown
+
+ai_setup
+out=$("$repo/bin/omarchy-potato-ai" enable --yes 2>&1); rc=$?
+check "ai enable succeeds (stubbed build)" [ $rc -eq 0 ] || echo "$out"
+check "ai enabled state written" grep -q '^variant=prism-ptq1_0' "$AIST/enabled"
+check "ai status shows ok with RSS" bash -c "'$repo/bin/omarchy-potato-ai' status | grep -q 'result=ok.*peak_rss_kb='"
+check "ai build log written" bash -c "ls '$AIST'/logs/build-*.log >/dev/null"
+"$repo/bin/omarchy-potato-ai" disable >/dev/null 2>&1
+check "ai disable removes module files" bash -c "[ ! -e '$AIST/enabled' ] && [ ! -d '$XDG_DATA_HOME/potato-mode/ai' ]"
+teardown
+
+ai_fail() { # name env... : expects failure at step, disabled module, message with log path
+  local name="$1" stepname="$2"; shift 2
+  ai_setup
+  out=$(env "$@" "$repo/bin/omarchy-potato-ai" enable --yes 2>&1); rc=$?
+  check "ai failure: $name -> exit non-zero" [ $rc -ne 0 ]
+  check "ai failure: $name -> step $stepname recorded" grep -q "^step=$stepname" "$AIST/last-build"
+  check "ai failure: $name -> module disabled, retry+fallback offered" bash -c "[ ! -e '$AIST/enabled' ] && grep -q 'retry:' <<<'$out' && grep -q -- '--fallback' <<<'$out' && grep -q 'log:' <<<'$out'"
+  check "ai failure: $name -> base potato-mode untouched" test ! -e "$XDG_STATE_HOME/potato-mode/applied-at"
+}
+ai_fail "no network" preflight FAKE_NET_RC=6; teardown
+ai_fail "missing toolchain" preflight POTATO_AI_TOOLS=potato-no-such-tool; teardown
+ai_fail "low disk" preflight POTATO_AI_MIN_FREE_KB=999999999999; teardown
+ai_fail "wrong commit" fetch-source FAKE_REV=deadbeef
+check "ai failure: wrong commit -> source removed" test ! -d "$XDG_DATA_HOME/potato-mode/ai/src-prism-ptq1_0"; teardown
+ai_fail "build error" build FAKE_BUILD_RC=2; teardown
+ai_fail "build timeout" build FAKE_BUILD_RC=124
+check "ai failure: timeout message" grep -q 'timed out' <<<"$out"; teardown
+ai_fail "checksum mismatch" fetch-model POTATO_AI_MODEL_SHA256=0000
+check "ai failure: bad download removed" bash -c "! ls '$XDG_DATA_HOME'/potato-mode/ai/models/* >/dev/null 2>&1"; teardown
+ai_fail "download interrupted" fetch-model FAKE_DL_RC=18; teardown
+ai_fail "binary crashes (illegal instruction)" smoke-test FAKE_SERVER_BROKEN=1
+check "ai failure: broken binary removed" test ! -e "$XDG_DATA_HOME/potato-mode/ai/src-prism-ptq1_0/build/bin/llama-server"; teardown
+ai_fail "RSS over limit" smoke-test POTATO_AI_RSS_LIMIT_KB=1; teardown
+ai_fail "no generation" smoke-test FAKE_CHAT_FAIL=1 POTATO_AI_SMOKE_TIMEOUT=2; teardown
+
+# retry resumes: after a build failure, source is not re-fetched
+ai_setup
+FAKE_BUILD_RC=2 "$repo/bin/omarchy-potato-ai" enable --yes >/dev/null 2>&1
+: >"$STUBLOG"
+"$repo/bin/omarchy-potato-ai" enable --yes >/dev/null 2>&1; rc=$?
+check "ai retry succeeds and resumes (no re-fetch)" bash -c "[ $rc -eq 0 ] && ! grep -q 'git -C .* fetch' '$STUBLOG'"
+teardown
+
+ai_setup
+out=$("$repo/bin/omarchy-potato-ai" enable --fallback --dry-run 2>&1)
+check "ai --fallback uses upstream + Q2_0" bash -c "grep -q ggml-org/llama.cpp <<<'$out' && grep -q Q2_0.gguf <<<'$out'"
+teardown
+
+# --- potato-ask
+ai_setup
+mkdir -p "$AIST"
+printf 'variant=x\nserver=/bin/true\nmodel=/dev/null\n' >"$AIST/enabled"
+export POTATO_AI_NO_SERVER=1
+export FAKE_REPLY_FILE=$T/reply-tool.json
+jq -n --arg c "touch $T/ran" '{choices:[{message:{content:"",tool_calls:[{function:{name:"run",arguments:({cmd:$c}|tojson)}}]}}]}' >"$FAKE_REPLY_FILE"
+out=$(echo n | "$repo/bin/omarchy-potato-ask" "make a file" 2>&1)
+check "ask shows proposed command" grep -q "proposed: touch $T/ran" <<<"$out"
+check "ask does not run without confirmation" test ! -e "$T/ran"
+echo n | "$repo/bin/omarchy-potato-ask" --dry-run "make a file" >/dev/null 2>&1
+check "ask --dry-run never runs" test ! -e "$T/ran"
+echo y | "$repo/bin/omarchy-potato-ask" "make a file" >/dev/null 2>&1
+check "ask runs after confirmation" test -e "$T/ran"
+grep -q '"enable_thinking":false' <<<"$(grep chat/completions "$STUBLOG")"; check "ask sends thinking off" [ $? -eq 0 ]
+rm -f "$AIST/enabled"
+"$repo/bin/omarchy-potato-ask" "hi" >/dev/null 2>&1; check "ask refuses when module disabled" [ $? -ne 0 ]
+unset POTATO_AI_NO_SERVER FAKE_REPLY_FILE
+teardown
+
+# mini-skill budget: <= 500 tokens (estimate: 1 token ~ 4 chars; also <= 375 words)
+chars=$(wc -c <"$repo/share/potato-mode/ai/mini-skill.md"); words=$(wc -w <"$repo/share/potato-mode/ai/mini-skill.md")
+check "mini-skill <= 500 tokens (chars/4=$((chars / 4)), words=$words)" bash -c "(( $chars / 4 <= 500 && $words <= 375 ))"
+
 echo "---"
 echo "passed: $pass  failed: $fail"
 (( fail == 0 ))
