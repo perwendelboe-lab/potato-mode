@@ -96,21 +96,14 @@ if [[ $compositor == "sway" ]]; then
   if grep -rqs "^Session=" "$POTATO_SYSROOT/etc/sddm.conf.d/" 2>/dev/null; then
     printf '[Autologin]\nSession=sway.desktop\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf" && say "autologin session -> sway"
   fi
-  # Omarchy's greeter theme always picks the first session whose name contains "uwsm"
-  # (Hyprland), whatever the user last chose (seen on 4.0.4). Ship a copy that picks Sway.
-  theme=$POTATO_SYSROOT/usr/share/sddm/themes/omarchy
-  if grep -qs 'indexOf("uwsm")' "$theme/Main.qml"; then
-    for f in "$theme"/*; do
-      [[ -f $f ]] || continue
-      if [[ ${f##*/} == Main.qml ]]; then
-        sed 's/indexOf("uwsm")/indexOf("Sway")/' "$f"
-      else
-        cat "$f"
-      fi | root_write_if_changed "$POTATO_SYSROOT/usr/share/sddm/themes/potato/${f##*/}"  || true
-    done
-    printf '[Theme]\nCurrent=potato\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-theme.conf" && say "SDDM theme -> potato (selects the Sway session)"
-  elif [[ -d $theme ]]; then
-    warn "Omarchy greeter theme changed; check that the login screen picks the Sway session"
+  # Without autologin the greeter preselects SDDM's last session, which is Omarchy's
+  # Hyprland one on a fresh install (seen on 4.0.4). Point it at sway once; later logins keep it.
+  state=$POTATO_SYSROOT/var/lib/sddm/state.conf
+  sway_session=/usr/share/wayland-sessions/sway.desktop
+  if [[ -f $state ]] && ! grep -qs "^Session=$sway_session" "$state"; then
+    { sed '/^Session=/d; s|^\[Last\]$|[Last]\nSession='"$sway_session"'|' "$state"
+      grep -q '^\[Last\]' "$state" || printf '[Last]\nSession=%s\n' "$sway_session"
+    } | root_write_if_changed "$state" && say "greeter preselects the sway session"
   fi
 fi
 
