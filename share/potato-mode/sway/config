@@ -63,9 +63,12 @@ for_window [app_id="potato-menu"] floating enable, resize set 800 500
 bar {
   position top
   status_command while date +'%a %d %b %H:%M'; do sleep 30; done
-  colors { background #1a1b26 statusline #c0caf5 }
+  colors {
+    background #1a1b26
+    statusline #c0caf5
+  }
 }
 exec mako
 exec /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
 exec swayidle -w timeout 300 'swaylock -f -c 1a1b26' before-sleep 'swaylock -f -c 1a1b26'
-include ~/.config/sway/config.d/*
+# Personal additions: create ~/.config/sway/config.d/ and add "include ~/.config/sway/config.d/*" here.

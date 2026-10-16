@@ -120,7 +120,16 @@ write_if_changed() {
     return 0
   fi
   mkdir -p "$(dirname "$target")"
-  backup_file "$target"
+  # Only back up files potato-mode didn't create/own already; otherwise a later
+  # re-apply would "back up" potato's own older version as the original.
+  if ! grep -qxF -- "$target" "$POTATO_STATE/written.list" 2>/dev/null; then
+    backup_file "$target"
+  fi
+  if [[ -e $target ]]; then
+    chmod --reference="$target" "$tmp"
+  else
+    chmod 644 "$tmp"
+  fi
   mv -- "$tmp" "$target"
   state_add written.list "$target"
   return 0
@@ -176,7 +185,7 @@ version_lt() {
 # Strip whole-line // comments (Omarchy's JSONC dialect) for jq.
 # Also drops trailing commas, which Omarchy's shipped menu uses.
 jsonc_to_json() {
-  sed -E '/^[[:space:]]*\/\//d' "$1" | perl -0pe 's/,(\s*[}\]])/$1/g'
+  sed -E '/^[[:space:]]*\/\//d' "$1" | sed -zE 's/,([[:space:]]*[]}])/\1/g'
 }
 
 # Install stdin as a root-owned file if it differs. Records it for revert.

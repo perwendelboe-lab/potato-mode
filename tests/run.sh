@@ -84,7 +84,6 @@ check "hyprland kept (Omarchy hard dep)" grep -qx hyprland "$PACDB"
 check "hyprland.lua requires hypr.potato" grep -q 'require("hypr.potato")' "$HOME/.config/hypr/hyprland.lua"
 check "potato.lua written" test -f "$HOME/.config/hypr/potato.lua"
 check "sway config written" test -f "$HOME/.config/sway/config"
-check "sway config.d exists" test -d "$HOME/.config/sway/config.d"
 check "sddm greeter override" grep -q weston "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato.conf"
 check "autologin session -> sway" grep -q 'Session=sway.desktop' "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf"
 check "zram config written (none existed)" test -f "$POTATO_SYSROOT/etc/systemd/zram-generator.conf.d/90-potato.conf"
@@ -116,6 +115,15 @@ check "disable removes sddm override" test ! -e "$POTATO_SYSROOT/etc/sddm.conf.d
 check "disable removes hook" test ! -e "$XDG_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
 check "disable reinstalls dropped obsidian" grep -qx obsidian "$PACDB"
 check "disable strips firefox user.js block" bash -c "! grep -q potato '$HOME/.mozilla/firefox/abc.default/user.js'"
+teardown
+
+# --- re-apply after potato's own templates changed must not treat potato's file as the original
+setup
+"$repo/bin/omarchy-potato-enable" --yes >/dev/null 2>&1
+echo "# changed" >>"$HOME/.config/sway/config"
+"$repo/bin/omarchy-potato-apply" --yes --quiet >/dev/null 2>&1
+"$repo/bin/omarchy-potato-disable" --yes >/dev/null 2>&1
+check "disable removes potato-created file even after re-apply rewrote it" test ! -e "$HOME/.config/sway/config"
 teardown
 
 # --- hyprland path
