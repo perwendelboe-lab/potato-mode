@@ -100,9 +100,11 @@ if [[ $compositor == "sway" ]]; then
   # Hyprland one on a fresh install (seen on 4.0.4). Point it at sway once; later logins keep it.
   state=$POTATO_SYSROOT/var/lib/sddm/state.conf
   sway_session=/usr/share/wayland-sessions/sway.desktop
-  if [[ -f $state ]] && ! grep -qs "^Session=$sway_session" "$state"; then
-    { sed '/^Session=/d; s|^\[Last\]$|[Last]\nSession='"$sway_session"'|' "$state"
-      grep -q '^\[Last\]' "$state" || printf '[Last]\nSession=%s\n' "$sway_session"
+  # /var/lib/sddm is sddm-owned and not readable by the user.
+  state_txt=$(cat "$state" 2>/dev/null || sudo -n cat "$state" 2>/dev/null || true)
+  if [[ -n $state_txt ]] && ! grep -q "^Session=$sway_session" <<<"$state_txt"; then
+    { sed '/^Session=/d; s|^\[Last\]$|[Last]\nSession='"$sway_session"'|' <<<"$state_txt"
+      grep -q '^\[Last\]' <<<"$state_txt" || printf '[Last]\nSession=%s\n' "$sway_session"
     } | root_write_if_changed "$state" && say "greeter preselects the sway session"
   fi
 fi
