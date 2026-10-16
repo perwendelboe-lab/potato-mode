@@ -46,5 +46,5 @@ if [[ $version == unknown || $version == dev* ]] || version_lt "$version" "$OMAR
   fi
 fi
 
-(( status == 0 )) && say "Omarchy $version on channel $channel: OK"
+(( status == 0 )) && say "Omarchy $version on channel $channel: OK$( (( force_channel || force_version )) && echo " (checks overridden)")"
 exit $status

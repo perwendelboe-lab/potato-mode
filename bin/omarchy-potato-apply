@@ -122,8 +122,11 @@ if [[ -d $apps_dir ]]; then
 fi
 
 # 8. Omarchy menu entries.
+if ! have jq; then
+  warn "jq missing; skipping Omarchy menu entries"
+else
 menu_file="$POTATO_CONFIG_HOME/omarchy/extensions/omarchy-menu.jsonc"
-potato_json=$(jsonc_to_json "$POTATO_SHARE/menu/potato-menu.jsonc")
+  potato_json=$(jsonc_to_json "$POTATO_SHARE/menu/potato-menu.jsonc")
 if [[ -f $menu_file ]]; then
   if existing=$(jsonc_to_json "$menu_file" | jq -e . 2>/dev/null); then
     jq -n --argjson a "$existing" --argjson b "$potato_json" '$a + $b' | write_if_changed "$menu_file" && say "menu entries merged"
@@ -132,6 +135,7 @@ if [[ -f $menu_file ]]; then
   fi
 else
   jq . <<<"$potato_json" | write_if_changed "$menu_file" && say "menu entries added"
+fi
 fi
 
 # 9. Defaults and notes.

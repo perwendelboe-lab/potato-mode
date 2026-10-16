@@ -19,7 +19,12 @@ source "$POTATO_SHARE/packages.sh"
 source "$POTATO_SHARE/compat"
 
 say() {
-  (( POTATO_QUIET )) || echo "potato: $*"
+  (( POTATO_QUIET )) && return 0
+  if (( POTATO_DRY_RUN )) && [[ $1 != would* ]]; then
+    echo "potato: (dry-run) $*"
+  else
+    echo "potato: $*"
+  fi
 }
 
 warn() {
