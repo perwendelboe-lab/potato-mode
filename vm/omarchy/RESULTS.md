@@ -25,3 +25,19 @@ Kernel 7.2.5-3-omarchy. Official omarchy-4.0.4 ISO (sha256 checked), unencrypted
 ## Stock idle memory
 See raw-stock-idle.txt: 630 MiB used / 313 MiB available, 451 MiB swap (zram).
 PSS: quickshell 164 MiB (+229 swapped), Hyprland 83 (+100), foot 12.
+
+## potato-mode enable (after `omarchy update` synced DBs)
+- The `apply` run completed ("potato: applied"). With mesa-utils installed, detect read
+  `gles=3.2 renderer=llvmpipe software=1 -> sway`, so the software-render rule picked sway.
+- Dropped: chromium obsidian libreoffice-fresh docker-buildx docker-compose
+  gpu-screen-recorder moonlight-qt omacut pinta aether nautilus-python sushi nautilus evince dotnet-runtime.
+- Not removable, so it was left alone with a warning: docker (needed by ufw-docker), tesseract and
+  tesseract-data-eng (they depend on each other, so dropping them one at a time fails).
+- Added: mesa-utils firefox firefox-ublock-origin abiword gnumeric aerc yazi nnn weechat
+  zathura zathura-pdf-poppler openai-codex links sway swaybg swaylock swayidle mako polkit-gnome weston.
+- Verified files: the post-update hook is in hooks/post-update.d/potato-mode, the menu entries
+  are in extensions/omarchy-menu.jsonc, /etc/sddm.conf.d/zz-potato.conf, and the
+  Firefox system prefs are in /usr/lib/firefox/defaults/pref/potato-mode.js (25 prefs). xdg default
+  browser is firefox.desktop.
+- Firefox 1st run (headless) created a profile at ~/.config/mozilla/firefox (XDG path, which
+  firefox_profile_dirs covers). uBlock Origin shows active=true, location app-global.
