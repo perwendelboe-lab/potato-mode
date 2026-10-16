@@ -21,6 +21,8 @@ done
 [[ $(uname -m) == "x86_64" ]] || die "potato-mode is x86_64 only (found $(uname -m))"
 
 status=0
+# omarchy-channel-current reads $OMARCHY_PATH under `set -u`; it is unset in non-login shells (e.g. ssh), seen on 4.0.4.
+export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 if have omarchy-channel-current; then
   channel=$(omarchy-channel-current 2>/dev/null || echo unknown)
 else

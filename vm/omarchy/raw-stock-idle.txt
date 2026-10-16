@@ -1,0 +1,23 @@
+               total        used        free      shared  buff/cache   available
+Mem:             944         630          76          28         402         313
+Swap:           1887         451        1436
+NAME       ALGORITHM DISKSIZE   DATA COMPR TOTAL STREAMS MOUNTPOINT
+/dev/zram0 zstd          944M 430.8M 90.5M 94.7M         [SWAP]
+--- top PSS (MiB) / swap (MiB)
+   164    229 quickshell
+    83    100 Hyprland
+    12      0 foot
+     8      0 systemd-journal
+     7     11 uwsm
+     7      8 fcitx5
+     6      1 systemd
+     5      2 NetworkManager
+     5      0 sshd-session
+     4     21 udiskie
+     3     16 Xwayland
+     3      3 xdg-desktop-por
+     2      1 wireplumber
+     2      1 systemd
+     2      0 sshd-session
+--- totals
+sum PSS 357 MiB, sum swapped 443 MiB
