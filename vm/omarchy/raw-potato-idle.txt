@@ -1,0 +1,25 @@
+# sway session ~11 min after login, one foot open. Same VM, after omarchy update + potato enable; sddm restarted (not a fresh boot).
+      11:07 sway
+               total        used        free      shared  buff/cache   available
+Mem:             944         413          80          17         606         530
+Swap:           1887          32        1855
+NAME       ALGORITHM DISKSIZE  DATA COMPR TOTAL STREAMS MOUNTPOINT
+/dev/zram0 zstd          944M 32.2M 12.3M 13.4M         [SWAP]
+--- top PSS (MiB) / swap (MiB)
+   127      4 sway
+    14      0 polkit-gnome-au
+    13      0 systemd-journal
+    10      0 sddm-helper
+    10      0 sddm
+    10      0 foot
+     9      0 wireplumber
+     7      2 NetworkManager
+     6      0 swaybar
+     5      1 systemd
+     4      0 systemd
+     4      0 pipewire
+     4      0 gvfsd
+     3      0 sshd-session
+     3      0 gnome-keyring-d
+--- totals
+sum PSS 272 MiB, sum swapped 27 MiB

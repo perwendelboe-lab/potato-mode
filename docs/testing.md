@@ -2,7 +2,7 @@
 
 ## Automated (box)
 - `tests/shellcheck.sh`: clean (ShellCheck 0.11.0).
-- `tests/run.sh`: 51/51 pass. Uses a fake HOME and sysroot with stubbed pacman/sudo/omarchy-*. Covers GPU detection (GLES2 / GLES3 / llvmpipe fixtures), channel/version gate, dry-run touches nothing, the sway and Hyprland paths, idempotent re-apply, the post-update hook re-dropping Chromium and re-pointing web apps, the hook skipping packages on an untested Omarchy version, full revert, and the menu renderer against fixtures and the real Omarchy 4 `omarchy-menu.jsonc`.
+- `tests/run.sh`: 126/126 pass. Uses a fake HOME and sysroot with stubbed pacman/sudo/omarchy-*. Covers GPU detection (GLES2 / GLES3 / llvmpipe fixtures), channel/version gate, dry-run touches nothing, the sway and Hyprland paths, idempotent re-apply, the post-update hook re-dropping Chromium and re-pointing web apps, the hook skipping packages on an untested Omarchy version, full revert, and the menu renderer against fixtures and the real Omarchy 4 `omarchy-menu.jsonc`.
 
 ## In the 1 GB TCG VM (plain Arch, **not Omarchy**; see vm/RESULTS.md)
 - `install.sh` → `omarchy-potato enable --yes --force-channel --force-version` installed the real packages through pacman: OK. `tesseract` couldn't be dropped because `zathura-pdf-mupdf` → `libmupdf` needs it. Switched to `zathura-pdf-poppler`.
@@ -13,7 +13,15 @@
 - Menu renderer on the real Omarchy menu: 11 root rows (Apps … System + Potato mode). The first version showed 0 because the shipped file uses trailing commas; fixed.
 - enable → apply → disable: file set identical to before (clean revert). Found and fixed a bug where a re-apply backed up potato's own older file as the "original".
 
+## On real Omarchy 4.0.4 (1 GB TCG VM; see vm/omarchy/RESULTS.md)
+- Verified: `omarchy-version`/channel and `omarchy-potato check`; `omarchy-pkg-add`/`-drop` via enable (after
+  `omarchy update` synced the DBs; a fresh install only has offline.db, so `apply` now stops with a hint); the post-update hook inside a
+  real `omarchy update`; menu entries merged into omarchy-menu.jsonc (comments in that file are lost; the original is backed up);
+  Firefox system prefs, user.js in the XDG profile dir, and uBlock active; xdg default browser; SDDM greeter on weston;
+  login into sway (needed the new SDDM last-session fix).
+- Idle: stock 630 MiB used / 451 MiB zram swap vs potato (sway) 413 MiB used / 32 MiB swap.
+
 ## Not tested
-- Anything on a real Omarchy install: `omarchy-channel-current`/`omarchy-version` output, `omarchy-pkg-add`/`-drop`, the post-update hook inside a real `omarchy update`, the menu extension showing up in the Quickshell menu, `potato.lua` loading in Hyprland 0.56 Lua (including whether `o.bind` replaces the stock web app bindings), and SDDM using the weston greeter override.
-- Interactive fzf/gum menu navigation (only `--print` was tested), Firefox picking up the user.js and system prefs, uBlock auto-enabling, and xdg defaults.
-- Real 2006 hardware, GLES2 GPUs, reboot with zram active.
+- Hyprland path on real Omarchy: `potato.lua` loading in Hyprland Lua and whether `o.bind` replaces the stock web-app bindings.
+- The potato entry rendering inside the Quickshell menu, and interactive fzf/gum menu navigation (only `--print`).
+- Real 2006 hardware, GLES2 GPUs.

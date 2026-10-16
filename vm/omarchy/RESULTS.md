@@ -45,3 +45,34 @@ PSS: quickshell 164 MiB (+229 swapped), Hyprland 83 (+100), foot 12.
   apply warnings show up inside /tmp/omarchy-update.log. That run wrote the marked block in
   the new Firefox profile's user.js (27 lines). So the hook re-applies the settings, and it also
   catches profiles created after enable.
+
+## SDDM greeter and session
+- After reboot, SDDM runs its greeter on `weston --shell=kiosk --renderer=pixman` (zz-potato.conf).
+  The Omarchy greeter theme renders on it (screenshot checked).
+- Bug found: with no autologin (unencrypted install), SDDM preselects the last session
+  `/usr/local/share/wayland-sessions/omarchy.desktop` (Hyprland via uwsm), so logging in started Hyprland.
+  First attempt: a copy of the theme matching "Sway" instead of "uwsm". It did not help (still
+  Hyprland), so it was dropped. Fix: on the sway path, `apply` sets `[Last] Session=` in
+  /var/lib/sddm/state.conf to sway.desktop. It reads the file via sudo because /var/lib/sddm isn't user-readable,
+  and it backs the file up for revert. After that, logging in at the greeter started sway (sway, swaybar, swaybg, swayidle; no Hyprland or
+  quickshell running). Screenshot checked.
+
+## Idle memory: stock vs potato-mode (same VM, PSS via smaps_rollup, one foot open)
+| | stock Omarchy 4.0.4 (Hyprland+Quickshell) | potato-mode (sway) |
+|---|---|---|
+| time after login | ~10 min | ~11 min |
+| `free` used / available | 630 / 313 MiB | 413 / 530 MiB |
+| swap (zram) used | 451 MiB | 32 MiB |
+| zram data / compressed total | 430.8 / 94.7 MiB | 32.2 / 13.4 MiB |
+| compositor + shell PSS (swapped) | Hyprland 83 (100) + quickshell 164 (229) | sway 127 (4) + swaybar 6 |
+| sum PSS / sum swapped (all processes) | 357 / 443 MiB | 272 / 27 MiB |
+
+Caveats: there was only one sample of each. The stock run was after a fresh boot, before `omarchy update`. The potato run
+was after the update, with sddm restarted rather than a fresh boot. sway alone reaches 127 MiB PSS on llvmpipe in this VM.
+Raw output: raw-stock-idle.txt and raw-potato-idle.txt.
+
+## Not verified on real Omarchy
+- Hyprland path: potato.lua loading and `o.bind` replacing the web-app binds (this VM picks sway; we did not log into Hyprland).
+- The potato entry showing in the Quickshell menu (the entry was merged into omarchy-menu.jsonc and parses, but Quickshell
+  isn't running on the sway path). The interactive fzf/gum menu.
+- Real 2006 hardware / GLES2 GPUs.
