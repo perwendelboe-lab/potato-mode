@@ -6,5 +6,5 @@
   "setup.hidden": { "label": "Hidden", "action": "true", "when": "false" },
   "trigger": { "label": "Trigger" },
   "trigger.share": { "label": "Share" },
-  "trigger.share.file": { "label": "File", "action": "echo file" }
+  "trigger.share.file": { "label": "File", "action": "echo file" },
 }

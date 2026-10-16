@@ -174,8 +174,9 @@ version_lt() {
 }
 
 # Strip whole-line // comments (Omarchy's JSONC dialect) for jq.
+# Also drops trailing commas, which Omarchy's shipped menu uses.
 jsonc_to_json() {
-  sed -E '/^[[:space:]]*\/\//d' "$1"
+  sed -E '/^[[:space:]]*\/\//d' "$1" | perl -0pe 's/,(\s*[}\]])/$1/g'
 }
 
 # Install stdin as a root-owned file if it differs. Records it for revert.

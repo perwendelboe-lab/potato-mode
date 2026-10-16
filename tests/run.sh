@@ -45,7 +45,7 @@ S
 }
 teardown() { rm -rf "$T"; unset POTATO_COMPOSITOR; }
 
-snapshot() { (cd "$T" && find home root pacdb -type f -exec md5sum {} + | sort); }
+snapshot() { (cd "$T" && find home root pacdb -type f ! -name applied-at -exec md5sum {} + | sort); }
 
 # --- detect
 for f in gles2:sway gles3:hyprland llvmpipe:sway; do
@@ -84,6 +84,7 @@ check "hyprland kept (Omarchy hard dep)" grep -qx hyprland "$PACDB"
 check "hyprland.lua requires hypr.potato" grep -q 'require("hypr.potato")' "$HOME/.config/hypr/hyprland.lua"
 check "potato.lua written" test -f "$HOME/.config/hypr/potato.lua"
 check "sway config written" test -f "$HOME/.config/sway/config"
+check "sway config.d exists" test -d "$HOME/.config/sway/config.d"
 check "sddm greeter override" grep -q weston "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato.conf"
 check "autologin session -> sway" grep -q 'Session=sway.desktop' "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf"
 check "zram config written (none existed)" test -f "$POTATO_SYSROOT/etc/systemd/zram-generator.conf.d/90-potato.conf"
@@ -137,6 +138,8 @@ check "menu submenu shows children" grep -q '^setup.theme' <<<"$out"
 check "menu hides entries whose 'when' fails" bash -c "! grep -q setup.hidden <<<'$out'"
 out=$(POTATO_MENU_SHIPPED=$repo/tests/fixtures/omarchy-menu.jsonc POTATO_MENU_USER=$repo/share/potato-mode/menu/potato-menu.jsonc "$repo/bin/omarchy-potato-menu" --print)
 check "menu merges user extension" grep -q '^potato' <<<"$out"
+out=$(POTATO_MENU_SHIPPED=/workspace/ref/omarchy/default/omarchy/omarchy-menu.jsonc POTATO_MENU_USER=/nonexistent "$repo/bin/omarchy-potato-menu" --print 2>/dev/null)
+[[ -f /workspace/ref/omarchy/default/omarchy/omarchy-menu.jsonc ]] && check "menu parses real Omarchy menu (if ref clone present)" grep -q "^setup" <<<"$out"
 teardown
 
 echo "---"

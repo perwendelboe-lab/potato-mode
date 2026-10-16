@@ -86,6 +86,7 @@ fi
 
 # 5. sway path: session config, greeter, autologin session.
 if [[ $compositor == "sway" ]]; then
+  run mkdir -p "$POTATO_CONFIG_HOME/sway/config.d"  # the config includes config.d/*; sway errors if it's missing
   write_if_changed "$POTATO_CONFIG_HOME/sway/config" <"$POTATO_SHARE/sway/config" && say "wrote sway config"
   root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato.conf" <"$POTATO_SHARE/sddm/zz-potato.conf" && say "SDDM greeter -> weston (pixman)"
   if grep -rqs "^Session=" "$POTATO_SYSROOT/etc/sddm.conf.d/" 2>/dev/null; then

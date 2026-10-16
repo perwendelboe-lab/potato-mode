@@ -32,7 +32,7 @@ POTATO_ADD=(
   mpv imv
   yazi nnn
   weechat
-  zathura zathura-pdf-mupdf
+  zathura zathura-pdf-poppler  # not -mupdf: libmupdf pulls tesseract (seen in VM)
   neovim
   openai-codex
   links
