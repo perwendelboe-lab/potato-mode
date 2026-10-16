@@ -1,0 +1,8 @@
+# VM disks, keys, logs
+*.qcow2
+*.img
+*.iso
+id_ed25519*
+*.pem
+vm/serial.log
+*.log
