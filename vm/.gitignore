@@ -1,0 +1,6 @@
+base.qcow2
+Arch-*.qcow2
+seed.img
+id_ed25519*
+serial.log
+*.log
