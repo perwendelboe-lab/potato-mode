@@ -1,0 +1,8 @@
+// potato-mode entries for the Omarchy menu (merged into ~/.config/omarchy/extensions/omarchy-menu.jsonc)
+{
+  "potato": { "icon": "󰠜", "label": "Potato mode" },
+  "potato.status": { "icon": "", "label": "Status", "action": "omarchy-launch-floating-terminal-with-presentation omarchy-potato-status" },
+  "potato.apply": { "icon": "", "label": "Re-apply", "action": "omarchy-launch-floating-terminal-with-presentation 'omarchy-potato-apply'" },
+  "potato.libreoffice": { "icon": "", "label": "Install LibreOffice", "action": "omarchy-launch-floating-terminal-with-presentation 'omarchy-potato-apply --with-libreoffice'" },
+  "potato.disable": { "icon": "", "label": "Disable potato mode", "action": "omarchy-launch-floating-terminal-with-presentation omarchy-potato-disable" }
+}

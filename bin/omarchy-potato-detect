@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# omarchy:summary=Detect GPU capability and print the compositor potato-mode would use (hyprland|sway)
+# omarchy:group=potato
+# omarchy:name=detect
+# omarchy:args=[--verbose]
+
+set -euo pipefail
+
+# POTATO_COMPOSITOR forces the answer; POTATO_EGLINFO_OUTPUT feeds canned eglinfo output (tests).
+if [[ -n ${POTATO_COMPOSITOR:-} ]]; then
+  echo "$POTATO_COMPOSITOR"
+  exit 0
+fi
+
+if [[ -n ${POTATO_EGLINFO_OUTPUT:-} ]]; then
+  info=$(cat "$POTATO_EGLINFO_OUTPUT")
+elif command -v eglinfo >/dev/null 2>&1; then
+  info=$(eglinfo -B -p gbm 2>/dev/null || true)
+else
+  echo "potato: eglinfo missing (install mesa-utils); assuming no GLES 3.0" >&2
+  echo sway
+  exit 0
+fi
+
+gles=$(grep -m1 -oE 'OpenGL ES profile version( string)?: OpenGL ES [0-9]+\.[0-9]+' <<<"$info" | grep -oE '[0-9]+\.[0-9]+$' || true)
+renderer=$(grep -m1 -E 'OpenGL ES profile renderer' <<<"$info" | sed 's/.*renderer: //' || true)
+software=0
+if [[ $renderer =~ llvmpipe|softpipe|swrast|lavapipe ]]; then
+  software=1
+fi
+
+choice=sway
+if [[ -n $gles ]] && (( ${gles%%.*} >= 3 )) && (( ! software )); then
+  choice=hyprland
+fi
+
+if [[ ${1:-} == "--verbose" ]]; then
+  echo "gles=${gles:-none} renderer=${renderer:-unknown} software=$software -> $choice"
+else
+  echo "$choice"
+fi

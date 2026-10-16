@@ -1,0 +1,4 @@
+GBM platform:
+OpenGL ES profile vendor: Mesa
+OpenGL ES profile renderer: Mesa Intel(R) 965GM (CL)
+OpenGL ES profile version: OpenGL ES 2.0 Mesa 26.2.4

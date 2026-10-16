@@ -1,0 +1,7 @@
+#!/bin/bash
+# potato-mode post-update hook: re-assert overrides after `omarchy update`.
+# Installed by omarchy-potato-apply into ~/.config/omarchy/hooks/post-update.d/
+apply=$(command -v omarchy-potato-apply || echo "$HOME/.local/bin/omarchy-potato-apply")
+if [[ -x $apply ]]; then
+  "$apply" --from-hook --quiet --yes
+fi

@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# omarchy:summary=Terminal (fzf/gum) renderer of the Omarchy menu, for sessions without Quickshell
+# omarchy:group=potato
+# omarchy:name=menu
+# omarchy:args=[submenu-id|apps] [--print]
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
+shipped=${POTATO_MENU_SHIPPED:-$omarchy_path/default/omarchy/omarchy-menu.jsonc}
+user=${POTATO_MENU_USER:-$POTATO_CONFIG_HOME/omarchy/extensions/omarchy-menu.jsonc}
+
+load_menu() {
+  local a='{}' b='{}'
+  [[ -f $shipped ]] && a=$(jsonc_to_json "$shipped" | jq -c . 2>/dev/null || echo '{}')
+  [[ -f $user ]] && b=$(jsonc_to_json "$user" | jq -c . 2>/dev/null || echo '{}')
+  jq -n --argjson a "$a" --argjson b "$b" '$a + $b'
+}
+
+# Rows for one submenu: id<TAB>label<TAB>kind. Children = ids exactly one segment below parent.
+rows() {
+  local menu="$1" parent="$2"
+  jq -r --arg p "$parent" '
+    to_entries[]
+    | select(.value | type == "object")
+    | .key as $k
+    | select(if $p == "" then ($k | contains(".") | not) else ($k | startswith($p + ".")) and (($k | ltrimstr($p + ".")) | contains(".") | not) end)
+    | [$k, ((.value.icon // " ") + "  " + (.value.label // ($k | split(".") | last))),
+       (if .value.action then "action" elif .value.target then "link" else "submenu" end),
+       (.value.when // "")]
+    | @tsv' <<<"$menu"
+}
+
+guard_ok() {
+  [[ -z $1 ]] && return 0
+  bash -c "$1" >/dev/null 2>&1
+}
+
+pick() {
+  if command -v fzf >/dev/null 2>&1; then
+    fzf --with-nth=2 --delimiter=$'\t' --prompt="${1:-Omarchy} > " --height=100% --reverse
+  else
+    gum filter --placeholder "${1:-Omarchy}"
+  fi
+}
+
+apps_menu() {
+  local dir f name
+  for dir in "$POTATO_DATA_HOME/applications" /usr/share/applications; do
+    for f in "$dir"/*.desktop; do
+      [[ -f $f ]] || continue
+      grep -q '^NoDisplay=true' "$f" && continue
+      name=$(grep -m1 '^Name=' "$f" | cut -d= -f2-)
+      printf '%s\t%s\n' "$(basename "$f" .desktop)" "$name"
+    done
+  done | sort -u -t$'\t' -k1,1 | pick Apps | cut -f1
+}
+
+main() {
+  local parent="${1:-}" menu sel id kind action target
+  if [[ $parent == "apps" ]]; then
+    sel=$(apps_menu) || exit 0
+    [[ -n $sel ]] && exec setsid gtk-launch "$sel" >/dev/null 2>&1
+    exit 0
+  fi
+  menu=$(load_menu)
+  while true; do
+    list=""
+    while IFS=$'\t' read -r id label kind when; do
+      guard_ok "$when" || continue
+      list+="$id"$'\t'"$label"$'\t'"$kind"$'\n'
+    done < <(rows "$menu" "$parent")
+    if [[ ${PRINT:-0} == 1 ]]; then
+      printf '%s' "$list"
+      return 0
+    fi
+    [[ -n $list ]] || { echo "empty menu: ${parent:-root}" >&2; return 1; }
+    sel=$(printf '%s' "$list" | pick "${parent:-Omarchy}") || return 0
+    [[ -n $sel ]] || return 0
+    id=$(cut -f1 <<<"$sel")
+    kind=$(cut -f3 <<<"$sel")
+    case $kind in
+      action)
+        action=$(jq -r --arg k "$id" '.[$k].action' <<<"$menu")
+        setsid bash -c "$action" >/dev/null 2>&1 &
+        return 0
+        ;;
+      link)
+        target=$(jq -r --arg k "$id" '.[$k].target' <<<"$menu")
+        parent=$target
+        ;;
+      *) parent=$id ;;
+    esac
+  done
+}
+
+args=()
+for a in "$@"; do
+  if [[ $a == "--print" ]]; then PRINT=1; else args+=("$a"); fi
+done
+main "${args[@]}"

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# omarchy:summary=potato-mode: make Omarchy usable on ~2006 hardware
+# omarchy:group=potato
+# omarchy:args=<enable|disable|apply|status|detect|check|menu|webapp> [options]
+
+set -euo pipefail
+dir=$(dirname "$(readlink -f "$0")")
+sub=${1:-status}
+shift || true
+case $sub in
+  enable | disable | apply | status | detect | check | menu | webapp) exec "$dir/omarchy-potato-$sub" "$@" ;;
+  -h | --help | help)
+    sed -n 's/^# omarchy:summary=/  /p' "$dir"/omarchy-potato-*
+    ;;
+  *) echo "Usage: omarchy-potato <enable|disable|apply|status|detect|check|menu|webapp>" >&2; exit 1 ;;
+esac

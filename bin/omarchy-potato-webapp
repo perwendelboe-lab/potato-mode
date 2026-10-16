@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# omarchy:summary=Open a web app URL as a Firefox tab (potato-mode replacement for omarchy-launch-webapp)
+# omarchy:group=potato
+# omarchy:name=webapp
+# omarchy:args=<url>
+
+set -euo pipefail
+
+if (( $# < 1 )); then
+  echo "Usage: omarchy-potato-webapp <url>" >&2
+  exit 1
+fi
+
+if command -v uwsm-app >/dev/null 2>&1 && [[ -n ${WAYLAND_DISPLAY:-} ]] && pgrep -x Hyprland >/dev/null; then
+  exec setsid uwsm-app -- firefox --new-tab "$1"
+else
+  exec setsid firefox --new-tab "$1"
+fi

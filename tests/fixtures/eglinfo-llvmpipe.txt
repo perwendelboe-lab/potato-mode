@@ -1,0 +1,4 @@
+GBM platform:
+OpenGL ES profile vendor: Mesa
+OpenGL ES profile renderer: llvmpipe (LLVM 23.1.1, 256 bits)
+OpenGL ES profile version: OpenGL ES 3.2 Mesa 26.2.4

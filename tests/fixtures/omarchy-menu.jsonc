@@ -1,0 +1,10 @@
+// shipped menu fixture
+{
+  "apps": { "icon": "A", "label": "Apps", "action": "echo apps" },
+  "setup": { "icon": "S", "label": "Setup" },
+  "setup.theme": { "icon": "T", "label": "Theme", "action": "echo theme" },
+  "setup.hidden": { "label": "Hidden", "action": "true", "when": "false" },
+  "trigger": { "label": "Trigger" },
+  "trigger.share": { "label": "Share" },
+  "trigger.share.file": { "label": "File", "action": "echo file" }
+}

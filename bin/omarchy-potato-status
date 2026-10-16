@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# omarchy:summary=Show potato-mode state, compositor choice, memory and zram
+# omarchy:group=potato
+# omarchy:name=status
+
+set -uo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+if [[ -f $POTATO_STATE/applied-at ]]; then
+  echo "potato mode: enabled (last applied $(<"$POTATO_STATE/applied-at"))"
+  echo "compositor:  $(cat "$POTATO_STATE/compositor" 2>/dev/null || echo unknown)"
+else
+  echo "potato mode: not enabled"
+fi
+echo "detected:    $("$POTATO_ROOT/bin/omarchy-potato-detect" --verbose 2>&1)"
+"$POTATO_ROOT/bin/omarchy-potato-check" 2>&1 || true
+echo "dropped:     $(state_list dropped.list | paste -sd' ')"
+echo "added:       $(state_list added.list | paste -sd' ')"
+free -m 2>/dev/null | sed 's/^/  /'
+have zramctl && zramctl 2>/dev/null | sed 's/^/  /'
+exit 0

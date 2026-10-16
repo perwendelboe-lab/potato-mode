@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# omarchy:summary=Turn on potato mode: check compatibility, then apply all changes
+# omarchy:group=potato
+# omarchy:name=enable
+# omarchy:args=[--dry-run] [--yes] [--with-libreoffice] [--force-channel] [--force-version]
+# omarchy:examples=omarchy potato enable --dry-run
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+check_args=()
+apply_args=()
+yes=0
+for arg in "$@"; do
+  case $arg in
+    --force-channel | --force-version) check_args+=("$arg") ;;
+    --yes) yes=1; apply_args+=("$arg") ;;
+    --dry-run) POTATO_DRY_RUN=1; apply_args+=("$arg") ;;
+    *) apply_args+=("$arg") ;;
+  esac
+done
+
+"$POTATO_ROOT/bin/omarchy-potato-check" "${check_args[@]}" || exit 1
+
+if (( ! yes && ! POTATO_DRY_RUN )) && [[ -t 0 ]] && have gum; then
+  gum confirm "Enable potato mode? Heavy apps (Chromium, Obsidian, Docker, LibreOffice…) will be removed." || exit 0
+fi
+
+exec "$POTATO_ROOT/bin/omarchy-potato-apply" "${apply_args[@]}"

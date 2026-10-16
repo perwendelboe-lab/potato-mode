@@ -1,0 +1,6 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034
+# Omarchy versions potato-mode has been written/tested against.
+OMARCHY_MIN=4.0.0
+OMARCHY_MAX_EXCLUSIVE=4.1.0
+OMARCHY_SUPPORTED_CHANNELS="stable"

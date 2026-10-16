@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# omarchy:summary=Turn off potato mode and revert its changes (restores packages and files)
+# omarchy:group=potato
+# omarchy:name=disable
+# omarchy:args=[--dry-run] [--yes] [--keep-packages]
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+keep_packages=0
+yes=0
+for arg in "$@"; do
+  case $arg in
+    --dry-run) POTATO_DRY_RUN=1 ;;
+    --yes) yes=1 ;;
+    --keep-packages) keep_packages=1 ;;
+    *) die "unknown option: $arg" ;;
+  esac
+done
+export POTATO_DRY_RUN
+
+[[ -d $POTATO_STATE ]] || { say "potato mode is not enabled"; exit 0; }
+
+if (( ! yes && ! POTATO_DRY_RUN )) && [[ -t 0 ]] && have gum; then
+  gum confirm "Disable potato mode and restore Omarchy defaults?" || exit 0
+fi
+
+# Hook first, so an update mid-revert doesn't re-apply.
+hook="$POTATO_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
+[[ -f $hook ]] && run rm -f -- "$hook"
+
+# Marked blocks.
+remove_marked_block "$POTATO_CONFIG_HOME/hypr/hyprland.lua" "--"
+while IFS= read -r prof; do
+  remove_marked_block "$prof/user.js" "//"
+done < <(firefox_profile_dirs)
+
+# User files: restore backups, delete files we created.
+while IFS= read -r f; do
+  [[ -n $f ]] || continue
+  if [[ -e $POTATO_STATE/backups$f ]]; then
+    restore_file "$f"
+  else
+    run rm -f -- "$f"
+  fi
+done < <(state_list written.list)
+
+# Root files.
+while IFS= read -r f; do
+  [[ -n $f ]] || continue
+  if [[ -e $POTATO_STATE/backups$f ]]; then
+    run_root install -Dm644 "$POTATO_STATE/backups$f" "$f"
+  else
+    run_root rm -f -- "$f"
+  fi
+done < <(state_list root-written.list)
+
+if (( ! keep_packages )); then
+  mapfile -t dropped < <(state_list dropped.list)
+  if (( ${#dropped[@]} )); then
+    say "reinstalling: ${dropped[*]}"
+    pkg_add "${dropped[@]}" || warn "some packages could not be reinstalled (AUR ones need: omarchy-pkg-aur-add)"
+  fi
+  mapfile -t added < <(state_list added.list)
+  if (( ${#added[@]} )); then
+    say "packages potato-mode added are kept (remove with: omarchy-pkg-drop ${added[*]})"
+  fi
+fi
+
+if (( POTATO_DRY_RUN )); then
+  say "dry run complete, nothing changed"
+else
+  mv -- "$POTATO_STATE" "$POTATO_STATE.disabled-$(date +%Y%m%d%H%M%S)"
+  say "potato mode disabled; log out and back in (or reboot) to return to Hyprland"
+fi

@@ -1,0 +1,25 @@
+// potato-mode: Firefox tuned for 1-2 GB RAM, HDD, no/old GPU.
+// potato-mode:begin
+user_pref("browser.tabs.unloadOnLowMemory", true);
+user_pref("browser.low_commit_space_threshold_mb", 300);
+user_pref("browser.tabs.min_inactive_duration_before_unload", 300000);
+user_pref("dom.ipc.processCount", 2);
+user_pref("dom.ipc.processCount.webIsolated", 1);
+user_pref("fission.autostart", false);
+user_pref("browser.sessionstore.interval", 120000);
+user_pref("browser.sessionstore.restore_on_demand", true);
+user_pref("browser.cache.disk.enable", false);
+user_pref("browser.cache.memory.capacity", 32768);
+user_pref("browser.startup.preXulSkeletonUI", false);
+user_pref("media.hardware-video-decoding.enabled", false);
+user_pref("media.autoplay.default", 5);
+user_pref("extensions.pocket.enabled", false);
+user_pref("browser.newtabpage.activity-stream.feeds.topsites", false);
+user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
+user_pref("toolkit.telemetry.enabled", false);
+user_pref("datareporting.healthreport.uploadEnabled", false);
+user_pref("app.shield.optoutstudies.enabled", false);
+user_pref("extensions.autoDisableScopes", 0);
+user_pref("browser.ml.enable", false);
+user_pref("widget.use-xdg-desktop-portal.file-picker", 0);
+// potato-mode:end

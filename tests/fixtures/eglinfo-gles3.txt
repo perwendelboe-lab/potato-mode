@@ -1,0 +1,4 @@
+GBM platform:
+OpenGL ES profile vendor: AMD
+OpenGL ES profile renderer: AMD Radeon HD 5450 (r600, cedar)
+OpenGL ES profile version: OpenGL ES 3.1 Mesa 26.2.4

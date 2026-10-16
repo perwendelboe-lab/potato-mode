@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# omarchy:summary=Apply (or re-apply) every potato-mode change; idempotent and safe to repeat
+# omarchy:group=potato
+# omarchy:name=apply
+# omarchy:args=[--dry-run] [--yes] [--quiet] [--redetect] [--with-libreoffice] [--from-hook] [--no-packages]
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+from_hook=0
+redetect=0
+with_lo=0
+no_packages=0
+for arg in "$@"; do
+  case $arg in
+    --dry-run) POTATO_DRY_RUN=1 ;;
+    --quiet) POTATO_QUIET=1 ;;
+    --yes) ;;
+    --redetect) redetect=1 ;;
+    --with-libreoffice) with_lo=1 ;;
+    --from-hook) from_hook=1 ;;
+    --no-packages) no_packages=1 ;;
+    *) die "unknown option: $arg" ;;
+  esac
+done
+export POTATO_DRY_RUN POTATO_QUIET
+
+state_init
+
+# 1. Compositor choice (sticky once recorded).
+if [[ -f $POTATO_STATE/compositor && $redetect == 0 ]]; then
+  compositor=$(<"$POTATO_STATE/compositor")
+else
+  compositor=$("$POTATO_ROOT/bin/omarchy-potato-detect")
+  (( POTATO_DRY_RUN )) || echo "$compositor" >"$POTATO_STATE/compositor"
+fi
+say "compositor: $compositor ($("$POTATO_ROOT/bin/omarchy-potato-detect" --verbose 2>/dev/null || true))"
+
+# From the hook, skip package drops when Omarchy moved outside the tested range.
+in_range=1
+if (( from_hook )) && ! "$POTATO_ROOT/bin/omarchy-potato-check" >/dev/null 2>&1; then
+  in_range=0
+  warn "Omarchy is outside potato-mode's tested range; re-applying configs only"
+  have omarchy-notification-send && omarchy-notification-send "Potato mode: Omarchy version untested, packages left alone" || true
+fi
+
+# 2. Packages.
+if (( ! no_packages && in_range )); then
+  wanted=("${POTATO_ADD[@]}")
+  [[ $compositor == "sway" ]] && wanted+=("${POTATO_ADD_SWAY[@]}")
+  (( with_lo )) && wanted+=("${POTATO_OPTIONAL_LIBREOFFICE[@]}")
+  missing=()
+  for p in "${wanted[@]}"; do
+    pkg_installed "$p" || missing+=("$p")
+  done
+  if (( ${#missing[@]} )); then
+    say "installing: ${missing[*]}"
+    pkg_add "${missing[@]}"
+    for p in "${missing[@]}"; do state_add added.list "$p"; done
+  fi
+  for p in "${POTATO_DROP[@]}"; do
+    pkg_installed "$p" || continue
+    say "removing $p"
+    if pkg_drop_one "$p"; then
+      state_add dropped.list "$p"
+    else
+      warn "could not remove $p (probably required by another package); leaving it"
+    fi
+  done
+fi
+
+# 3. zram (Omarchy already ships zram-size = ram; only fill the gap if that's absent).
+if ! compgen -G "$POTATO_SYSROOT/usr/lib/systemd/zram-generator.conf.d/*" >/dev/null && ! compgen -G "$POTATO_SYSROOT/etc/systemd/zram-generator.conf*" >/dev/null && [[ ! -f $POTATO_SYSROOT/usr/lib/systemd/zram-generator.conf ]]; then
+  printf '[zram0]\nzram-size = ram\ncompression-algorithm = zstd\n' | root_write_if_changed "$POTATO_SYSROOT/etc/systemd/zram-generator.conf.d/90-potato.conf" && say "zram configured (active after reboot)"
+fi
+
+# 4. Hyprland override (user-owned files only).
+hypr_dir="$POTATO_CONFIG_HOME/hypr"
+write_if_changed "$hypr_dir/potato.lua" <"$POTATO_SHARE/hypr/potato.lua" && say "wrote $hypr_dir/potato.lua"
+if [[ -f $hypr_dir/hyprland.lua ]]; then
+  echo 'require("hypr.potato")' | set_marked_block "$hypr_dir/hyprland.lua" "--"
+fi
+
+# 5. sway path: session config, greeter, autologin session.
+if [[ $compositor == "sway" ]]; then
+  write_if_changed "$POTATO_CONFIG_HOME/sway/config" <"$POTATO_SHARE/sway/config" && say "wrote sway config"
+  root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato.conf" <"$POTATO_SHARE/sddm/zz-potato.conf" && say "SDDM greeter -> weston (pixman)"
+  if grep -rqs "^Session=" "$POTATO_SYSROOT/etc/sddm.conf.d/" 2>/dev/null; then
+    printf '[Autologin]\nSession=sway.desktop\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf" && say "autologin session -> sway"
+  fi
+fi
+
+# 6. Firefox: system default prefs for new profiles + user.js in existing ones.
+ff_prefs=$(sed -n 's/^user_pref(\(.*\));$/pref(\1);/p' "$POTATO_SHARE/firefox/user.js")
+if [[ $compositor == "sway" ]]; then
+  ff_prefs+=$'\n'$(sed -n 's/^user_pref(\(.*\));$/pref(\1);/p' "$POTATO_SHARE/firefox/user-software-render.js")
+fi
+if [[ -d $POTATO_SYSROOT/usr/lib/firefox ]] || (( POTATO_DRY_RUN )); then
+  printf '// potato-mode defaults\n%s\n' "$ff_prefs" | root_write_if_changed "$POTATO_SYSROOT/usr/lib/firefox/defaults/pref/potato-mode.js" && say "Firefox default prefs installed"
+fi
+while IFS= read -r prof; do
+  [[ -d $prof ]] || continue
+  {
+    grep -v '^// potato-mode' "$POTATO_SHARE/firefox/user.js"
+    [[ $compositor == "sway" ]] && grep -v '^//' "$POTATO_SHARE/firefox/user-software-render.js"
+  } | set_marked_block "$prof/user.js" "//"
+done < <(firefox_profile_dirs)
+
+# 7. Web apps -> Firefox tabs.
+apps_dir="$POTATO_DATA_HOME/applications"
+if [[ -d $apps_dir ]]; then
+  for desktop in "$apps_dir"/*.desktop; do
+    [[ -f $desktop ]] || continue
+    grep -qE '^Exec=.*omarchy-launch-(or-focus-)?webapp' "$desktop" || continue
+    url=$(grep -m1 '^Exec=' "$desktop" | grep -oE 'https?://[^ "]+' | head -1 || true)
+    [[ -n $url ]] || continue
+    sed -E "s#^Exec=.*#Exec=omarchy-potato-webapp $url#" "$desktop" | write_if_changed "$desktop" && say "web app -> Firefox tab: $(basename "$desktop")"
+  done
+fi
+
+# 8. Omarchy menu entries.
+menu_file="$POTATO_CONFIG_HOME/omarchy/extensions/omarchy-menu.jsonc"
+potato_json=$(jsonc_to_json "$POTATO_SHARE/menu/potato-menu.jsonc")
+if [[ -f $menu_file ]]; then
+  if existing=$(jsonc_to_json "$menu_file" | jq -e . 2>/dev/null); then
+    jq -n --argjson a "$existing" --argjson b "$potato_json" '$a + $b' | write_if_changed "$menu_file" && say "menu entries merged"
+  else
+    warn "$menu_file does not parse; leaving it alone"
+  fi
+else
+  jq . <<<"$potato_json" | write_if_changed "$menu_file" && say "menu entries added"
+fi
+
+# 9. Defaults and notes.
+run mkdir -p "$HOME/notes"
+if have xdg-mime; then
+  run xdg-mime default org.pwmt.zathura.desktop application/pdf
+  run xdg-mime default imv.desktop image/png image/jpeg image/gif image/webp
+fi
+have xdg-settings && run xdg-settings set default-web-browser firefox.desktop 2>/dev/null || true
+
+# 10. Post-update hook.
+hook="$POTATO_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
+write_if_changed "$hook" <"$POTATO_ROOT/hooks/post-update" && { run chmod 755 "$hook"; say "post-update hook installed"; }
+
+(( POTATO_DRY_RUN )) || date -Is >"$POTATO_STATE/applied-at"
+if (( POTATO_DRY_RUN )); then say "dry run complete, nothing changed"; else say "applied"; fi

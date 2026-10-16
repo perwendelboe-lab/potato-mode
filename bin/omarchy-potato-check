@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# omarchy:summary=Check Omarchy channel and version against potato-mode's tested range
+# omarchy:group=potato
+# omarchy:name=check
+# omarchy:args=[--force-channel] [--force-version]
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+force_channel=0
+force_version=0
+for arg in "$@"; do
+  case $arg in
+    --force-channel) force_channel=1 ;;
+    --force-version) force_version=1 ;;
+  esac
+done
+
+[[ $(uname -m) == "x86_64" ]] || die "potato-mode is x86_64 only (found $(uname -m))"
+
+status=0
+if have omarchy-channel-current; then
+  channel=$(omarchy-channel-current 2>/dev/null || echo unknown)
+else
+  channel=unknown
+fi
+if [[ " $OMARCHY_SUPPORTED_CHANNELS " != *" $channel "* ]]; then
+  if (( force_channel )); then
+    warn "Omarchy channel '$channel' is not supported (want: $OMARCHY_SUPPORTED_CHANNELS); continuing (--force-channel)"
+  else
+    echo "potato: Omarchy channel '$channel' is not supported (want: $OMARCHY_SUPPORTED_CHANNELS). Use --force-channel to override." >&2
+    status=1
+  fi
+fi
+
+version=$(omarchy-version 2>/dev/null || echo unknown)
+version=${version%%-*}
+if [[ $version == unknown || $version == dev* ]] || version_lt "$version" "$OMARCHY_MIN" || version_ge "$version" "$OMARCHY_MAX_EXCLUSIVE"; then
+  if (( force_version )); then
+    warn "Omarchy $version is outside the tested range [$OMARCHY_MIN, $OMARCHY_MAX_EXCLUSIVE); continuing (--force-version)"
+  else
+    echo "potato: Omarchy $version is outside the tested range [$OMARCHY_MIN, $OMARCHY_MAX_EXCLUSIVE). Use --force-version to override." >&2
+    status=1
+  fi
+fi
+
+(( status == 0 )) && say "Omarchy $version on channel $channel: OK"
+exit $status
