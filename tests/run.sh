@@ -16,6 +16,7 @@ setup() {
   export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config XDG_DATA_HOME=$T/home/.local/share XDG_STATE_HOME=$T/home/.local/state
   export POTATO_SYSROOT=$T/root PACDB=$T/pacdb STUBLOG=$T/stub.log
   mkdir -p "$POTATO_SYSROOT/var/lib/pacman/sync" && touch "$POTATO_SYSROOT/var/lib/pacman/sync/core.db"
+  mkdir -p "$POTATO_SYSROOT/usr/share/sddm/themes/omarchy" && printf 'if (name.indexOf("uwsm") !== -1)\n' >"$POTATO_SYSROOT/usr/share/sddm/themes/omarchy/Main.qml"
   mkdir -p "$HOME/.config/hypr" "$XDG_DATA_HOME/applications" "$T/stubs" "$POTATO_SYSROOT/usr/lib/firefox" "$POTATO_SYSROOT/etc/sddm.conf.d"
   printf 'chromium\nobsidian\ndocker\nevince\nfirefox\nhyprland\n' >"$PACDB"
   printf -- '-- user hyprland.lua\nrequire("default.hypr.omarchy")\n' >"$HOME/.config/hypr/hyprland.lua"
@@ -80,6 +81,8 @@ out=$("$repo/bin/omarchy-potato-enable" --yes 2>&1); rc=$?
 check "enable (sway) succeeds" [ $rc -eq 0 ] || echo "$out"
 check "chromium dropped" bash -c "! grep -qx chromium '$PACDB'"
 check "abiword added" grep -qx abiword "$PACDB"
+check "greeter theme copy selects Sway" grep -q 'indexOf("Sway")' "$POTATO_SYSROOT/usr/share/sddm/themes/potato/Main.qml"
+check "greeter theme set to potato" grep -qx Current=potato "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-theme.conf"
 check "sway extras added" grep -qx swaylock "$PACDB"
 check "hyprland kept (Omarchy hard dep)" grep -qx hyprland "$PACDB"
 check "hyprland.lua requires hypr.potato" grep -q 'require("hypr.potato")' "$HOME/.config/hypr/hyprland.lua"
@@ -101,7 +104,7 @@ check "marker block appears once" [ "$(grep -c 'potato-mode:begin' "$HOME/.confi
 # simulate an Omarchy update restoring chromium and the stock web app
 echo chromium >>"$PACDB"
 printf '[Desktop Entry]\nName=HEY\nExec=omarchy-launch-webapp https://app.hey.com\n' >"$XDG_DATA_HOME/applications/HEY.desktop"
-bash "$XDG_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode" >/dev/null 2>&1
+bash "$XDG_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode" >"$T/hook.log" 2>&1
 check "hook re-drops chromium after update" bash -c "! grep -qx chromium '$PACDB'"
 check "hook re-points web app" grep -q omarchy-potato-webapp "$XDG_DATA_HOME/applications/HEY.desktop"
 # hook with an untested Omarchy version: configs yes, packages no

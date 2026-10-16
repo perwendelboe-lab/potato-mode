@@ -96,6 +96,22 @@ if [[ $compositor == "sway" ]]; then
   if grep -rqs "^Session=" "$POTATO_SYSROOT/etc/sddm.conf.d/" 2>/dev/null; then
     printf '[Autologin]\nSession=sway.desktop\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf" && say "autologin session -> sway"
   fi
+  # Omarchy's greeter theme always picks the first session whose name contains "uwsm"
+  # (Hyprland), whatever the user last chose (seen on 4.0.4). Ship a copy that picks Sway.
+  theme=$POTATO_SYSROOT/usr/share/sddm/themes/omarchy
+  if grep -qs 'indexOf("uwsm")' "$theme/Main.qml"; then
+    for f in "$theme"/*; do
+      [[ -f $f ]] || continue
+      if [[ ${f##*/} == Main.qml ]]; then
+        sed 's/indexOf("uwsm")/indexOf("Sway")/' "$f"
+      else
+        cat "$f"
+      fi | root_write_if_changed "$POTATO_SYSROOT/usr/share/sddm/themes/potato/${f##*/}"  || true
+    done
+    printf '[Theme]\nCurrent=potato\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-theme.conf" && say "SDDM theme -> potato (selects the Sway session)"
+  elif [[ -d $theme ]]; then
+    warn "Omarchy greeter theme changed; check that the login screen picks the Sway session"
+  fi
 fi
 
 # 6. Firefox: system default prefs for new profiles + user.js in existing ones.
