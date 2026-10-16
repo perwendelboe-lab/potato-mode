@@ -56,6 +56,11 @@ if (( ! no_packages && in_range )); then
   for p in "${wanted[@]}"; do
     pkg_installed "$p" || missing+=("$p")
   done
+  if (( ${#missing[@]} )) && ! compgen -G "$POTATO_SYSROOT/var/lib/pacman/sync/core.db" >/dev/null; then
+    # Fresh Omarchy installs only have the ISO's offline.db; installing needs a synced
+    # database, and syncing without upgrading is a partial upgrade. Seen on 4.0.4.
+    die "package databases not synced yet; run 'omarchy update' first, then re-run"
+  fi
   if (( ${#missing[@]} )); then
     say "installing: ${missing[*]}"
     pkg_add "${missing[@]}"

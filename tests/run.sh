@@ -15,6 +15,7 @@ setup() {
   T=$(mktemp -d)
   export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config XDG_DATA_HOME=$T/home/.local/share XDG_STATE_HOME=$T/home/.local/state
   export POTATO_SYSROOT=$T/root PACDB=$T/pacdb STUBLOG=$T/stub.log
+  mkdir -p "$POTATO_SYSROOT/var/lib/pacman/sync" && touch "$POTATO_SYSROOT/var/lib/pacman/sync/core.db"
   mkdir -p "$HOME/.config/hypr" "$XDG_DATA_HOME/applications" "$T/stubs" "$POTATO_SYSROOT/usr/lib/firefox" "$POTATO_SYSROOT/etc/sddm.conf.d"
   printf 'chromium\nobsidian\ndocker\nevince\nfirefox\nhyprland\n' >"$PACDB"
   printf -- '-- user hyprland.lua\nrequire("default.hypr.omarchy")\n' >"$HOME/.config/hypr/hyprland.lua"
