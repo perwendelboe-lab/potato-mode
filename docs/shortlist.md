@@ -1,5 +1,7 @@
 # potato-mode app shortlist
 
+> Final picks per user decisions (2026-10-16): Firefox+uBlock, AbiWord+Gnumeric (LibreOffice optional), **imv** (not feh), Codex CLI. See PROPOSAL.md §0.
+
 Target: ~2006 x86_64 PCs (Core 2 Duo / Athlon 64, 1–2 GB RAM, HDD, GMA 950/X3000, Radeon X1x00, GeForce 6/7).
 
 ## How numbers were obtained

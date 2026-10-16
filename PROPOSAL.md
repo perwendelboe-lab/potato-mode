@@ -2,6 +2,23 @@
 
 An add-on for Omarchy (basecamp/omarchy) that keeps Omarchy's CLI/agent-first workflow, `omarchy-*` commands and keybinding menus, but makes it usable on ~2006 x86_64 hardware (Core 2 Duo / Athlon 64, 1–2 GB RAM, HDD, old GPU). Details: `docs/omarchy-conventions.md`, `docs/shortlist.md`.
 
+## 0. Decisions (user, 2026-10-16)
+| Topic | Decision |
+|---|---|
+| Compositor | Auto-detect: Hyprland if GLES ≥ 3.0, else sway |
+| Bar/menu | Quickshell where the GPU allows; otherwise a terminal (fzf/gum) renderer of `omarchy-menu.jsonc` |
+| Browser | Firefox, tuned, + uBlock Origin (`firefox-ublock-origin`) |
+| Web apps | Kept, re-pointed to Firefox tabs/windows instead of Chromium `--app` |
+| Office | AbiWord + Gnumeric default; LibreOffice optional |
+| Agent | OpenAI Codex CLI (`openai-codex`, Arch extra). User asked about a Vercel agent: none found as a standalone agent CLI; the Vercel CLI only plugs into Codex / Claude Code |
+| Image viewer | imv (keep Omarchy default, native Wayland) |
+| Shipping | Repo + installer (`omarchy-potato-*` commands, hook, menu extension) |
+| Min RAM | 1 GB; zram on by default |
+| Testing | 1 GB no-GPU VM (see `vm/`) now, real 2006 hardware later |
+| Arch scope | x86_64 only; no 32-bit pre-check — the installer failing is the gate |
+
+Section 6 below is kept as the original option list; the table above supersedes it.
+
 ## 1. The hard blocker: Hyprland on 2006 GPUs
 - Hyprland 0.50 dropped its legacy renderer and "now requires at least GLES 3.0" (hypr.land/news/update50/; Phoronix: phoronix.com/news/Hyprland-0.50-Released). Before that, a "very, very old PC" needed a `LEGACY_RENDERER` build (wiki.hypr.land/0.42.0/FAQ/); in hyprwm/Hyprland#6973 a GLES 3.0 laptop only worked after the context requirement was rolled back from 3.2 to 3.0.
 - Mesa `docs/features.txt` (main, fetched 2026-10-16): **GLES 3.0 DONE only for** freedreno, nv50, nvc0, r600, radeonsi, llvmpipe, softpipe, virgl, zink, d3d12, panfrost, asahi, iris, crocus/gen6+, v3d, etnaviv/HALTI5. That **excludes** the drivers for typical 2006 GPUs: `i915` (Intel GMA 900/950), `crocus` gen4/4.5 (GMA X3000/X3100, G965/GM965), `r300` (Radeon 9500–X1950), `nv30` (GeForce FX/6/7).
