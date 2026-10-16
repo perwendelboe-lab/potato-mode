@@ -13,7 +13,7 @@ misc { vfr = true
   disable_hyprland_logo = true }
 H
 printf 'output * bg #222222 solid_color\n' > ~/.config/sway/config
-treerss(){ local all=$(pstree -p $1 | grep -oE '\([0-9]+\)' | tr -d '()' | paste -sd,); ps -o rss= -p $all | awk '{s+=$1}END{printf "%.0f MiB (%d procs)", s/1024, NR}'; }
+treerss(){ local all=$(pstree -T -p $1 | grep -oE "\([0-9]+\)" | tr -d "()"); local s=0 n=0; for p in $all; do v=$(sudo awk "/^Pss:/{print \$2}" /proc/$p/smaps_rollup 2>/dev/null); [[ -n $v ]] && { s=$((s+v)); n=$((n+1)); }; done; echo "$((s/1024)) MiB PSS ($n procs)"; }
 mem(){ free -m | awk '/Mem/{print "used="$3"MiB avail="$7"MiB"} /Swap/{print "swap_used="$3"MiB"}' | paste -sd' '; }
 WAIT=${WAIT:-60}
 comp(){ name=$1; shift

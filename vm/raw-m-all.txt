@@ -1,0 +1,20 @@
+== hyprland
+baseline: used=321MiB avail=629MiB swap_used=0MiB
+renderer: llvmpipe
+compositor idle: 240 MiB PSS (2 procs) | used=495MiB avail=456MiB swap_used=0MiB
+compositor after apps: 240 MiB PSS (2 procs)
+== sway-pixman
+baseline: used=321MiB avail=629MiB swap_used=0MiB
+renderer: 
+compositor idle: 16 MiB PSS (1 procs) | used=326MiB avail=624MiB swap_used=0MiB
+compositor after apps: 16 MiB PSS (1 procs)
+codex (unauthenticated TUI start): 72 MiB
+./measure.sh: line 39:  1033 Killed                     script -qfc "timeout 30 codex" /dev/null < /dev/zero > /dev/null
+== sway
+baseline: used=277MiB avail=674MiB swap_used=18MiB
+renderer: 
+compositor idle: 120 MiB PSS (1 procs) | used=369MiB avail=582MiB swap_used=17MiB
+firefox fresh profile, 3 tabs: 391 MiB PSS (10 procs) | used=838MiB avail=113MiB swap_used=296MiB
+qutebrowser 1 tab: 453 MiB PSS (5 procs) | used=675MiB avail=275MiB swap_used=48MiB
+compositor after apps: 42 MiB PSS (1 procs)
+./measure.sh: line 41:  1627 Killed                     qutebrowser --temp-basedir https://en.wikipedia.org/wiki/Arch_Linux > /dev/null 2>&1

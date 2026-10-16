@@ -1,0 +1,7 @@
+hyprland 0.56.2-4
+sway 1:1.12-4
+mesa 1:26.2.4-1
+firefox 158.0-1
+qutebrowser 3.7.0-1
+openai-codex 0.163.0-1
+linux 7.2.10.arch1-1
