@@ -36,6 +36,16 @@ watchdog() {
   done
 }
 
+wait_ready() {
+  local i
+  for (( i = 0; i < START_WAIT; i++ )); do
+    curl -fs --max-time 5 "$URL/health" >/dev/null 2>&1 && return 0
+    server_alive || die "local model is not running; see $AI_STATE/server.log"
+    sleep 1
+  done
+  return 1
+}
+
 start_server() {
   local server model threads
   server=$(sed -n 's/^server=//p' "$AI_STATE/enabled")
@@ -45,15 +55,10 @@ start_server() {
   say "starting local model (first answer can take a minute on old hardware)"
   setsid nice -n 10 "$server" -m "$model" --host 127.0.0.1 --port "$PORT" -c 2048 -t "$threads" --jinja \
     --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 1.5 \
-    >"$AI_STATE/server.log" 2>&1 </dev/null &
+    >>"$AI_STATE/server.log" 2>&1 </dev/null &
   echo $! >"$pidfile"
-  local i
-  for (( i = 0; i < START_WAIT; i++ )); do
-    curl -fs --max-time 2 "$URL/health" >/dev/null 2>&1 && break
-    server_alive || die "local model failed to start; see $AI_STATE/server.log"
-    sleep 1
-  done
-  curl -fs --max-time 2 "$URL/health" >/dev/null 2>&1 || { stop_server; die "local model did not become ready in ${START_WAIT}s; see $AI_STATE/server.log"; }
+  wait_ready || { stop_server; die "local model did not become ready in ${START_WAIT}s; see $AI_STATE/server.log"; }
+  touch "$stamp"
   setsid "$0" --watchdog >/dev/null 2>&1 </dev/null &
 }
 
@@ -80,8 +85,17 @@ done
 [[ -f $AI_STATE/enabled ]] || die "local AI is not enabled (needs >= 2 GB RAM): omarchy-potato ai enable"
 have jq || die "jq is required"
 
-if [[ -z ${POTATO_AI_NO_SERVER:-} ]] && ! curl -fs --max-time 2 "$URL/health" >/dev/null 2>&1; then
-  start_server
+if [[ -z ${POTATO_AI_NO_SERVER:-} ]]; then
+  mkdir -p "$AI_STATE"
+  # One starter at a time; a running-but-busy server is waited for, never duplicated.
+  exec 9>"$AI_STATE/server.lock"
+  flock 9
+  if server_alive; then
+    wait_ready
+  else
+    start_server
+  fi
+  flock -u 9
 fi
 touch "$stamp"
 
