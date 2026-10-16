@@ -41,3 +41,7 @@ PSS: quickshell 164 MiB (+229 swapped), Hyprland 83 (+100), foot 12.
   browser is firefox.desktop.
 - Firefox 1st run (headless) created a profile at ~/.config/mozilla/firefox (XDG path, which
   firefox_profile_dirs covers). uBlock Origin shows active=true, location app-global.
+- Post-update hook: running `omarchy update -y` ran hooks/post-update.d/potato-mode, and the potato
+  apply warnings show up inside /tmp/omarchy-update.log. That run wrote the marked block in
+  the new Firefox profile's user.js (27 lines). So the hook re-applies the settings, and it also
+  catches profiles created after enable.
