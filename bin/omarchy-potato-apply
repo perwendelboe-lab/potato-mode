@@ -66,14 +66,23 @@ if (( ! no_packages && in_range )); then
     pkg_add "${missing[@]}"
     for p in "${missing[@]}"; do state_add added.list "$p"; done
   fi
+  stuck=()
   for p in "${POTATO_DROP[@]}"; do
     pkg_installed "$p" || continue
     say "removing $p"
-    if pkg_drop_one "$p"; then
+    if pkg_drop_one "$p" 2>/dev/null; then
       state_add dropped.list "$p"
     else
-      warn "could not remove $p (probably required by another package); leaving it"
+      stuck+=("$p")
     fi
+  done
+  # Packages that only need each other (tesseract + tesseract-data-eng) go in one transaction.
+  if (( ${#stuck[@]} > 1 )) && pkg_drop "${stuck[@]}" 2>/dev/null; then
+    for p in "${stuck[@]}"; do state_add dropped.list "$p"; done
+    stuck=()
+  fi
+  for p in "${stuck[@]}"; do
+    warn "could not remove $p (required by a package potato-mode keeps); leaving it"
   done
 fi
 

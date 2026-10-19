@@ -223,13 +223,14 @@ pkg_add() {
   fi
 }
 
-pkg_drop_one() {
+pkg_drop() {
   if have omarchy-pkg-drop; then
-    run omarchy-pkg-drop "$1"
+    run omarchy-pkg-drop "$@"
   else
-    run_root pacman -Rns --noconfirm -- "$1"
+    run_root pacman -Rns --noconfirm -- "$@"
   fi
 }
+pkg_drop_one() { pkg_drop "$1"; }
 
 # Firefox profile directories from profiles.ini (legacy and XDG locations).
 firefox_profile_dirs() {

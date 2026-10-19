@@ -8,7 +8,7 @@ POTATO_DROP=(
   chromium
   obsidian
   libreoffice-fresh
-  docker docker-buildx docker-compose
+  ufw-docker docker docker-buildx docker-compose
   dotnet-runtime
   superwhisper-bin
   gpu-screen-recorder
