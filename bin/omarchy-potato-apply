@@ -93,14 +93,14 @@ fi
 
 # 4. Hyprland override (user-owned files only).
 hypr_dir="$POTATO_CONFIG_HOME/hypr"
-write_if_changed "$hypr_dir/potato.lua" <"$POTATO_SHARE/hypr/potato.lua" && say "wrote $hypr_dir/potato.lua"
+{ cat "$POTATO_SHARE/hypr/potato.lua"; tune_snippet_hypr; } | write_if_changed "$hypr_dir/potato.lua" && say "wrote $hypr_dir/potato.lua"
 if [[ -f $hypr_dir/hyprland.lua ]]; then
   echo 'require("hypr.potato")' | set_marked_block "$hypr_dir/hyprland.lua" "--"
 fi
 
 # 5. sway path: session config, greeter, autologin session.
 if [[ $compositor == "sway" ]]; then
-  write_if_changed "$POTATO_CONFIG_HOME/sway/config" <"$POTATO_SHARE/sway/config" && say "wrote sway config"
+  { cat "$POTATO_SHARE/sway/config"; tune_snippet_sway; } | write_if_changed "$POTATO_CONFIG_HOME/sway/config" && say "wrote sway config"
   # Own session entry so the no-GPU environment (QT_QUICK_BACKEND=software: Omawrite 175 -> 55 MiB
   # measured) only applies to the potato sway session, never to Hyprland.
   root_write_if_changed "$POTATO_SYSROOT/usr/local/share/wayland-sessions/potato-sway.desktop" <"$POTATO_SHARE/sessions/potato-sway.desktop" && say "added the 'Sway (potato)' session"

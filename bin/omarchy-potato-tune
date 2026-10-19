@@ -1,0 +1,253 @@
+#!/bin/bash
+
+# omarchy:summary=Opt-in lightness tunings (printing, bluetooth, HDD scheduler, noatime, Xwayland, a11y, power profiles)
+# omarchy:group=potato
+# omarchy:name=tune
+# omarchy:args=[list|status|enable|disable] [option|--all] [--dry-run] [--yes] [--confirm-fstab]
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+# shellcheck source=../lib/potato-common.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+
+# name|description (savings measured on Omarchy 4.0.5 / 1 GB VM, see docs/tuning.md)
+OPTIONS=(
+  "no-printing|Disable CUPS and Avahi (printing, mDNS discovery). ~1.4 MiB"
+  "no-bluetooth|Disable bluetooth.service and the bt-agent user unit"
+  "hdd|BFQ I/O scheduler for rotational disks (udev rule)"
+  "noatime|Mount btrfs/ext4/xfs with noatime (edits /etc/fstab: asks first, keeps a backup)"
+  "no-xwayland|Turn off Xwayland in the sway/Hyprland config (X11 apps stop working; next login)"
+  "no-a11y|Mask the AT-SPI accessibility bus (breaks screen readers). ~2 MiB"
+  "no-power-profiles|Disable power-profiles-daemon (desktops; laptops lose power modes)"
+)
+UDEV_RULE=/etc/udev/rules.d/60-potato-bfq.rules
+FSTAB=$POTATO_SYSROOT/etc/fstab
+
+usage() { echo "Usage: omarchy-potato tune [list|status|enable|disable] [option|--all] [--dry-run] [--yes] [--confirm-fstab]" >&2; exit 1; }
+
+action=${1:-list}
+shift || true
+target=""
+yes=0
+confirm_fstab=0
+for arg in "$@"; do
+  case $arg in
+    --dry-run) POTATO_DRY_RUN=1 ;;
+    --yes) yes=1 ;;
+    --confirm-fstab) confirm_fstab=1 ;;
+    --all) target=--all ;;
+    -*) die "unknown option: $arg" ;;
+    *) if [[ -z $target ]]; then target=$arg; else usage; fi ;;
+  esac
+done
+export POTATO_DRY_RUN
+
+known() { local o; for o in "${OPTIONS[@]}"; do [[ ${o%%|*} == "$1" ]] && return 0; done; return 1; }
+names() { local o; for o in "${OPTIONS[@]}"; do echo "${o%%|*}"; done; }
+
+# --- per-option state: $POTATO_TUNE_STATE/<opt>/{enabled,undo,backups/}
+undo_add() { # opt line
+  (( POTATO_DRY_RUN )) && return 0
+  mkdir -p "$POTATO_TUNE_STATE/$1"
+  echo "$2" >>"$POTATO_TUNE_STATE/$1/undo"
+}
+mark_enabled() {
+  (( POTATO_DRY_RUN )) && return 0
+  mkdir -p "$POTATO_TUNE_STATE/$1"
+  date -Iseconds >"$POTATO_TUNE_STATE/$1/enabled"
+}
+
+sysctl_unit() { # scope(system|user) args...
+  local scope=$1; shift
+  if [[ $scope == user ]]; then run systemctl --user "$@"; else run_root systemctl "$@"; fi
+}
+unit_state() { # scope unit -> enabled|disabled|static|masked|...
+  local out
+  if [[ $1 == user ]]; then out=$(systemctl --user is-enabled "$2" 2>/dev/null); else out=$(systemctl is-enabled "$2" 2>/dev/null); fi
+  echo "${out:-not-found}"
+}
+# Disable (or mask, for static/D-Bus activated units) and stop; remember how to undo.
+unit_off() { # opt scope unit [mask]
+  local opt=$1 scope=$2 unit=$3 how=${4:-disable} st
+  st=$(unit_state "$scope" "$unit")
+  if [[ $how == mask ]]; then
+    [[ $st == masked || $st == not-found ]] && return 0
+    sysctl_unit "$scope" mask --now "$unit" && undo_add "$opt" "unmask $scope $unit"
+  else
+    [[ $st == enabled ]] || return 0
+    sysctl_unit "$scope" disable --now "$unit" && undo_add "$opt" "enable $scope $unit"
+  fi
+  say "$opt: ${how}d $scope unit $unit"
+}
+
+# Write a root-owned file for an option, backing up anything already there.
+tune_root_write() { # opt file < content
+  local opt=$1 f=$2 tmp
+  tmp=$(mktemp)
+  cat >"$tmp"
+  if [[ -e $POTATO_SYSROOT$f ]]; then
+    if (( ! POTATO_DRY_RUN )); then
+      mkdir -p "$POTATO_TUNE_STATE/$opt/backups$(dirname "$f")"
+      cp -a -- "$POTATO_SYSROOT$f" "$POTATO_TUNE_STATE/$opt/backups$f"
+    fi
+    undo_add "$opt" "restore $f"
+  else
+    undo_add "$opt" "remove $f"
+  fi
+  run_root install -Dm644 "$tmp" "$POTATO_SYSROOT$f"
+  rm -f "$tmp"
+}
+
+# Regenerate potato's compositor configs so tune snippets are added/removed.
+regen_configs() {
+  local f
+  f=$POTATO_CONFIG_HOME/sway/config
+  if grep -qxF -- "$f" "$POTATO_STATE/written.list" 2>/dev/null; then
+    { cat "$POTATO_SHARE/sway/config"; tune_snippet_sway; } | write_if_changed "$f" && say "updated $f"
+  fi
+  f=$POTATO_CONFIG_HOME/hypr/potato.lua
+  if grep -qxF -- "$f" "$POTATO_STATE/written.list" 2>/dev/null; then
+    { cat "$POTATO_SHARE/hypr/potato.lua"; tune_snippet_hypr; } | write_if_changed "$f" && say "updated $f"
+  fi
+  return 0
+}
+
+rotational_disks() {
+  local q
+  for q in "$POTATO_SYSROOT"/sys/block/*/queue; do
+    [[ -f $q/rotational && $(<"$q/rotational") == 1 ]] || continue
+    basename "$(dirname "$q")"
+  done
+}
+current_sched() { sed -n 's/.*\[\(.*\)\].*/\1/p' "$POTATO_SYSROOT/sys/block/$1/queue/scheduler" 2>/dev/null; }
+
+fstab_noatime() { # stdin fstab -> stdout with noatime on btrfs/ext4/ext3/xfs mounts
+  awk 'BEGIN{OFS="\t"}
+    /^[[:space:]]*#/ || NF < 4 { print; next }
+    $3 ~ /^(btrfs|ext4|ext3|xfs)$/ && $4 !~ /(^|,)(noatime|strictatime|lazytime)(,|$)/ {
+      if ($4 ~ /(^|,)relatime(,|$)/) sub(/relatime/, "noatime", $4); else $4 = "noatime," $4
+    }
+    { print }'
+}
+
+do_enable() {
+  local opt=$1 d
+  if tune_enabled "$opt"; then say "$opt: already enabled"; return 0; fi
+  case $opt in
+    no-printing)
+      for u in cups.path cups.socket cups.service avahi-daemon.socket avahi-daemon.service; do unit_off "$opt" system "$u"; done ;;
+    no-bluetooth)
+      unit_off "$opt" system bluetooth.service
+      unit_off "$opt" user bt-agent.service ;;
+    no-power-profiles)
+      compgen -G "$POTATO_SYSROOT/sys/class/power_supply/BAT*" >/dev/null && warn "a battery is present: laptops lose power-profile switching"
+      unit_off "$opt" system power-profiles-daemon.service ;;
+    no-a11y)
+      unit_off "$opt" user at-spi-dbus-bus.service mask ;;
+    no-xwayland)
+      mark_enabled "$opt"   # snippets read the marker
+      if (( POTATO_DRY_RUN )); then say "would add 'xwayland disable' to potato's sway/Hyprland config"; else regen_configs; fi
+      say "$opt: takes effect at the next login" ;;
+    hdd)
+      local disks; disks=$(rotational_disks | paste -sd' ')
+      [[ -n $disks ]] || say "hdd: no rotational disk detected right now; the rule applies when one appears"
+      for d in $disks; do
+        grep -qw bfq "$POTATO_SYSROOT/sys/block/$d/queue/scheduler" 2>/dev/null || warn "hdd: bfq not offered for $d (kernel without BFQ?)"
+        undo_add "$opt" "sched $d $(current_sched "$d")"
+      done
+      printf '%s\n' '# potato-mode (omarchy-potato tune hdd): BFQ for rotational disks.' \
+        'ACTION=="add|change", KERNEL=="sd[a-z]*|vd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"' |
+        tune_root_write "$opt" "$UDEV_RULE"
+      if [[ -z $POTATO_SYSROOT ]]; then
+        run_root udevadm control --reload
+        run_root udevadm trigger --action=change --subsystem-match=block
+      fi
+      say "hdd: BFQ rule installed${disks:+ (rotational: $disks)}" ;;
+    noatime)
+      [[ -f $FSTAB ]] || die "noatime: $FSTAB not found"
+      local new; new=$(mktemp)
+      fstab_noatime <"$FSTAB" >"$new"
+      if cmp -s "$FSTAB" "$new"; then rm -f "$new"; say "noatime: nothing to change"; mark_enabled "$opt"; return 0; fi
+      echo "noatime: proposed /etc/fstab change:"
+      diff -u "$FSTAB" "$new" | sed -n '3,$p' || true
+      if (( POTATO_DRY_RUN )); then rm -f "$new"; return 0; fi
+      if (( ! confirm_fstab )); then
+        if [[ -t 0 ]] && have gum; then
+          gum confirm "Write this to /etc/fstab (a backup is kept)?" || { rm -f "$new"; say "noatime: not changed"; return 0; }
+        elif [[ -t 0 ]]; then
+          read -r -p "Write this to /etc/fstab (a backup is kept)? [y/N] " a; [[ $a == [yY]* ]] || { rm -f "$new"; say "noatime: not changed"; return 0; }
+        else
+          rm -f "$new"; die "noatime edits /etc/fstab: run interactively, or pass --confirm-fstab"
+        fi
+      fi
+      if [[ -z $POTATO_SYSROOT ]] && have findmnt; then
+        findmnt --verify --tab-file "$new" >/dev/null 2>&1 || { rm -f "$new"; die "noatime: generated fstab fails findmnt --verify; not written"; }
+      fi
+      run_root cp -a -- "$FSTAB" "$FSTAB.potato-bak"
+      tune_root_write "$opt" /etc/fstab <"$new"
+      mkdir -p "$POTATO_TUNE_STATE/$opt" && cp -- "$new" "$POTATO_TUNE_STATE/$opt/written-fstab"
+      rm -f "$new"
+      say "noatime: /etc/fstab updated (backup: /etc/fstab.potato-bak); active after reboot" ;;
+  esac
+  mark_enabled "$opt"
+}
+
+do_disable() {
+  local opt=$1 line verb scope unit f
+  tune_enabled "$opt" || { say "$opt: not enabled"; return 0; }
+  if [[ $opt == noatime && -f $POTATO_TUNE_STATE/noatime/written-fstab ]] && ! cmp -s "$FSTAB" "$POTATO_TUNE_STATE/noatime/written-fstab"; then
+    warn "noatime: /etc/fstab changed since potato edited it; not restoring. Backup: $POTATO_TUNE_STATE/noatime/backups/etc/fstab"
+    (( POTATO_DRY_RUN )) || rm -rf -- "${POTATO_TUNE_STATE:?}/$opt"
+    return 0
+  fi
+  if [[ -f $POTATO_TUNE_STATE/$opt/undo ]]; then
+    # Undo in reverse order.
+    while read -r verb scope unit; do
+      case $verb in
+        enable) sysctl_unit "$scope" enable --now "$unit" || warn "could not re-enable $unit" ;;
+        unmask) sysctl_unit "$scope" unmask "$unit" || warn "could not unmask $unit" ;;
+        restore) run_root install -Dm644 "$POTATO_TUNE_STATE/$opt/backups$scope" "$POTATO_SYSROOT$scope" ;;
+        remove) run_root rm -f -- "$POTATO_SYSROOT$scope" ;;
+        sched) if [[ -n $unit ]]; then echo "$unit" | run_root tee "$POTATO_SYSROOT/sys/block/$scope/queue/scheduler" >/dev/null || true; fi ;;
+      esac
+    done < <(tac "$POTATO_TUNE_STATE/$opt/undo")
+  fi
+  if [[ $opt == hdd && -z $POTATO_SYSROOT ]]; then run_root udevadm control --reload; fi
+  if (( ! POTATO_DRY_RUN )); then
+    rm -rf -- "${POTATO_TUNE_STATE:?}/$opt"
+    [[ $opt == no-xwayland ]] && regen_configs
+  else
+    [[ $opt == no-xwayland ]] && say "would remove 'xwayland disable' from potato's configs"
+  fi
+  say "$opt: disabled (restored)"
+}
+
+case $action in
+  list)
+    for o in "${OPTIONS[@]}"; do
+      n=${o%%|*}; tune_enabled "$n" && s="on " || s="off"
+      printf '%s  %-18s %s\n' "$s" "$n" "${o#*|}"
+    done ;;
+  status)
+    any=0
+    while IFS= read -r n; do
+      tune_enabled "$n" || continue
+      any=1; echo "$n: enabled $(<"$POTATO_TUNE_STATE/$n/enabled")"
+      [[ -f $POTATO_TUNE_STATE/$n/undo ]] && sed 's/^/  undo: /' "$POTATO_TUNE_STATE/$n/undo"
+    done < <(names)
+    (( any )) || echo "no tunings enabled (see: omarchy-potato tune list)" ;;
+  enable | disable)
+    [[ -n $target ]] || usage
+    if [[ $target == --all ]]; then
+      [[ $action == disable ]] || die "--all only works with disable"
+      while IFS= read -r n; do tune_enabled "$n" && do_disable "$n"; done < <(names)
+      exit 0
+    fi
+    known "$target" || die "unknown tuning: $target (see: omarchy-potato tune list)"
+    if [[ $action == enable && $yes -eq 0 && $POTATO_DRY_RUN -eq 0 && $target != noatime ]] && [[ -t 0 ]] && have gum; then
+      gum confirm "Enable tuning '$target'?" || exit 0
+    fi
+    "do_$action" "$target" ;;
+  -h | --help | help) usage ;;
+  *) usage ;;
+esac

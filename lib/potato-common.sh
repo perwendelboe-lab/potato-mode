@@ -5,6 +5,8 @@ POTATO_ROOT=${POTATO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 POTATO_SHARE=${POTATO_SHARE:-$POTATO_ROOT/share/potato-mode}
 POTATO_STATE=${POTATO_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/potato-mode}
 POTATO_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+# Opt-in tunings (omarchy-potato tune) keep their own state so `disable` can revert them separately.
+POTATO_TUNE_STATE=${POTATO_TUNE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/potato-mode-tune}
 export POTATO_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 POTATO_DRY_RUN=${POTATO_DRY_RUN:-0}
 POTATO_QUIET=${POTATO_QUIET:-0}
@@ -253,4 +255,22 @@ firefox_profile_dirs() {
       esac
     done <"$ini"
   done
+}
+
+tune_enabled() { [[ -f $POTATO_TUNE_STATE/$1/enabled ]]; }
+
+# Config lines that enabled tunings add to the generated compositor configs.
+tune_snippet_sway() {
+  if tune_enabled no-xwayland; then
+    echo "# omarchy-potato tune: no-xwayland"
+    echo "xwayland disable"
+  fi
+  return 0
+}
+tune_snippet_hypr() {
+  if tune_enabled no-xwayland; then
+    echo "-- omarchy-potato tune: no-xwayland"
+    echo "hl.config({ xwayland = { enabled = false } })"
+  fi
+  return 0
 }

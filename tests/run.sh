@@ -149,6 +149,86 @@ check "hyprland path: journald cap too" test -f "$POTATO_SYSROOT/etc/systemd/jou
 check "hyprland path: compositor recorded" grep -qx hyprland "$XDG_STATE_HOME/potato-mode/compositor"
 teardown
 
+# --- tune (opt-in tunings)
+setup
+UNITS=$T/units; export UNITS
+printf 'system cups.path enabled\nsystem cups.socket enabled\nsystem cups.service enabled\nsystem avahi-daemon.socket enabled\nsystem avahi-daemon.service enabled\nsystem bluetooth.service enabled\nuser bt-agent.service enabled\nsystem power-profiles-daemon.service enabled\nuser at-spi-dbus-bus.service static\n' >"$UNITS"
+cat >"$T/stubs/systemctl" <<'S'
+#!/bin/bash
+echo "systemctl $*" >>"$STUBLOG"
+scope=system; [[ $1 == --user ]] && { scope=user; shift; }
+verb=$1; shift; [[ ${1:-} == --now ]] && shift
+u=$1
+case $verb in
+  is-enabled) st=$(awk -v s=$scope -v u="$u" '$1==s && $2==u {print $3}' "$UNITS"); [[ -n $st ]] || exit 1; echo "$st"; [[ $st == enabled ]] ;;
+  enable|disable|mask|unmask)
+    case $verb in enable) n=enabled ;; disable) n=disabled ;; mask) n=masked ;; unmask) n=static ;; esac
+    awk -v s=$scope -v u="$u" -v n=$n '$1==s && $2==u {$3=n} {print}' "$UNITS" >"$UNITS.t" && mv "$UNITS.t" "$UNITS" ;;
+esac
+exit 0
+S
+printf '#!/bin/bash\necho "udevadm $*" >>"$STUBLOG"\n' >"$T/stubs/udevadm"
+chmod +x "$T/stubs/systemctl" "$T/stubs/udevadm"
+unit_is() { awk -v s="$1" -v u="$2" '$1==s && $2==u {print $3}' "$UNITS" | grep -qx "$3"; }
+mkdir -p "$POTATO_SYSROOT/sys/block/sda/queue" "$POTATO_SYSROOT/sys/block/nvme0n1/queue"
+echo 1 >"$POTATO_SYSROOT/sys/block/sda/queue/rotational"; echo 'mq-deadline kyber [bfq] none' >/dev/null
+echo '[mq-deadline] kyber bfq none' >"$POTATO_SYSROOT/sys/block/sda/queue/scheduler"
+echo 0 >"$POTATO_SYSROOT/sys/block/nvme0n1/queue/rotational"
+printf 'UUID=1 / btrfs rw,relatime,compress=zstd:3,subvol=/@ 0 0\nUUID=2 /boot vfat rw,relatime 0 2\n# comment relatime\n' >"$POTATO_SYSROOT/etc/fstab"
+cp "$POTATO_SYSROOT/etc/fstab" "$T/fstab.orig"
+
+out=$("$repo/bin/omarchy-potato" tune list 2>&1)
+check "tune list shows all 7 options off" [ "$(grep -c '^off' <<<"$out")" -eq 7 ]
+before=$(cat "$UNITS")
+"$repo/bin/omarchy-potato-tune" enable no-printing --dry-run >/dev/null 2>&1
+check "tune dry-run changes nothing" bash -c "[ \"\$(cat '$UNITS')\" = '$before' ] && [ ! -e '$XDG_STATE_HOME/potato-mode-tune/no-printing' ]"
+"$repo/bin/omarchy-potato-tune" enable no-printing --yes >/dev/null 2>&1
+check "no-printing disables cups+avahi" bash -c "! grep -q 'cups.*enabled\|avahi.*enabled' '$UNITS'"
+check "no-printing leaves bluetooth alone" unit_is system bluetooth.service enabled
+"$repo/bin/omarchy-potato-tune" enable no-printing --yes >/dev/null 2>&1
+check "tune enable is idempotent (undo list not duplicated)" [ "$(wc -l <"$XDG_STATE_HOME/potato-mode-tune/no-printing/undo")" -eq 5 ]
+"$repo/bin/omarchy-potato-tune" disable no-printing >/dev/null 2>&1
+check "no-printing disable re-enables all 5 units" [ "$(cat "$UNITS")" = "$before" ]
+"$repo/bin/omarchy-potato-tune" enable no-bluetooth --yes >/dev/null 2>&1
+check "no-bluetooth: system + user unit" bash -c "grep -qx 'system bluetooth.service disabled' '$UNITS' && grep -qx 'user bt-agent.service disabled' '$UNITS'"
+"$repo/bin/omarchy-potato-tune" enable no-a11y --yes >/dev/null 2>&1
+check "no-a11y masks the static at-spi unit" unit_is user at-spi-dbus-bus.service masked
+"$repo/bin/omarchy-potato-tune" enable no-power-profiles --yes >/dev/null 2>&1
+check "no-power-profiles" unit_is system power-profiles-daemon.service disabled
+"$repo/bin/omarchy-potato-tune" enable hdd --yes >/dev/null 2>&1
+check "hdd: udev BFQ rule written" grep -q 'ATTR{queue/scheduler}="bfq"' "$POTATO_SYSROOT/etc/udev/rules.d/60-potato-bfq.rules"
+check "hdd: previous scheduler of rotational sda recorded, not nvme" bash -c "grep -qx 'sched sda mq-deadline' '$XDG_STATE_HOME/potato-mode-tune/hdd/undo' && ! grep -q nvme '$XDG_STATE_HOME/potato-mode-tune/hdd/undo'"
+"$repo/bin/omarchy-potato-tune" enable noatime --yes </dev/null >/dev/null 2>&1; rc=$?
+check "noatime refuses without a tty or --confirm-fstab (--yes is not enough)" bash -c "[ $rc -ne 0 ] && cmp -s '$T/fstab.orig' '$POTATO_SYSROOT/etc/fstab'"
+out=$("$repo/bin/omarchy-potato-tune" enable noatime --dry-run 2>&1)
+check "noatime dry-run shows the diff, writes nothing" bash -c "grep -q '+UUID=1' <<<'$out' && cmp -s '$T/fstab.orig' '$POTATO_SYSROOT/etc/fstab'"
+"$repo/bin/omarchy-potato-tune" enable noatime --confirm-fstab >/dev/null 2>&1
+check "noatime: btrfs relatime -> noatime, vfat and comments untouched" bash -c "grep -q 'btrfs.*rw,noatime,compress' '$POTATO_SYSROOT/etc/fstab' && grep -q 'vfat.*rw,relatime' '$POTATO_SYSROOT/etc/fstab' && grep -qx '# comment relatime' '$POTATO_SYSROOT/etc/fstab'"
+check "noatime: backups kept" bash -c "cmp -s '$T/fstab.orig' '$POTATO_SYSROOT/etc/fstab.potato-bak' && cmp -s '$T/fstab.orig' '$XDG_STATE_HOME/potato-mode-tune/noatime/backups/etc/fstab'"
+"$repo/bin/omarchy-potato-tune" disable noatime >/dev/null 2>&1
+check "noatime disable restores the original fstab" cmp -s "$T/fstab.orig" "$POTATO_SYSROOT/etc/fstab"
+"$repo/bin/omarchy-potato-tune" enable noatime --confirm-fstab >/dev/null 2>&1
+echo '# admin edit' >>"$POTATO_SYSROOT/etc/fstab"
+"$repo/bin/omarchy-potato-tune" disable noatime >/dev/null 2>&1
+check "noatime disable won't clobber a later fstab edit" grep -qx '# admin edit' "$POTATO_SYSROOT/etc/fstab"
+cp "$T/fstab.orig" "$POTATO_SYSROOT/etc/fstab"
+# no-xwayland on top of an enabled potato (sway path)
+"$repo/bin/omarchy-potato-enable" --yes >/dev/null 2>&1
+"$repo/bin/omarchy-potato-tune" enable no-xwayland --yes >/dev/null 2>&1
+check "no-xwayland adds 'xwayland disable' to sway config" grep -qx 'xwayland disable' "$HOME/.config/sway/config"
+check "no-xwayland adds hyprland lua setting" grep -q 'xwayland = { enabled = false }' "$HOME/.config/hypr/potato.lua"
+"$repo/bin/omarchy-potato-apply" --yes --quiet >/dev/null 2>&1
+check "re-apply keeps the tune snippet" grep -qx 'xwayland disable' "$HOME/.config/sway/config"
+"$repo/bin/omarchy-potato-tune" disable no-xwayland >/dev/null 2>&1
+check "no-xwayland disable removes it" bash -c "! grep -q xwayland '$HOME/.config/sway/config'"
+out=$("$repo/bin/omarchy-potato-tune" status 2>&1)
+check "tune status lists enabled options" bash -c "grep -q '^no-bluetooth: enabled' <<<'$out' && grep -q '^hdd: enabled' <<<'$out'"
+"$repo/bin/omarchy-potato-disable" --yes >/dev/null 2>&1
+check "potato disable reverts all tunings" bash -c "[ \"\$(cat '$UNITS')\" = '$before' ] && [ ! -e '$POTATO_SYSROOT/etc/udev/rules.d/60-potato-bfq.rules' ] && ! compgen -G '$XDG_STATE_HOME/potato-mode-tune/*/enabled' >/dev/null"
+check "hdd revert restored sda scheduler" grep -qx 'mq-deadline' "$POTATO_SYSROOT/sys/block/sda/queue/scheduler"
+"$repo/bin/omarchy-potato-tune" enable bogus >/dev/null 2>&1; check "unknown tuning rejected" [ $? -ne 0 ]
+teardown
+
 # --- menu renderer
 setup
 out=$(POTATO_MENU_SHIPPED=$repo/tests/fixtures/omarchy-menu.jsonc POTATO_MENU_USER=/nonexistent "$repo/bin/omarchy-potato-menu" --print)

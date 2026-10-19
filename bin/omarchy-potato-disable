@@ -35,6 +35,13 @@ if [[ -f $POTATO_STATE/ai/enabled || -d $POTATO_DATA_HOME/potato-mode/ai ]]; the
   "$POTATO_ROOT/bin/omarchy-potato-ai" "${ai_args[@]}" || warn "local AI module could not be removed"
 fi
 
+# Opt-in tunings (omarchy-potato tune) are reverted too.
+if compgen -G "$POTATO_TUNE_STATE/*/enabled" >/dev/null; then
+  tune_args=(disable --all)
+  (( POTATO_DRY_RUN )) && tune_args+=(--dry-run)
+  "$POTATO_ROOT/bin/omarchy-potato-tune" "${tune_args[@]}" || warn "some tunings could not be reverted (see: omarchy-potato tune status)"
+fi
+
 # Hook first, so an update mid-revert doesn't re-apply.
 hook="$POTATO_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
 [[ -f $hook ]] && run rm -f -- "$hook"
