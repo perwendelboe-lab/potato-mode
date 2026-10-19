@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Sway (potato)
+Comment=sway with potato-mode's no-GPU environment (Qt Quick software renderer)
+Exec=env QT_QUICK_BACKEND=software sway
+Type=Application
+DesktopNames=sway

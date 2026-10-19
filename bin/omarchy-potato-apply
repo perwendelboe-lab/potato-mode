@@ -101,14 +101,17 @@ fi
 # 5. sway path: session config, greeter, autologin session.
 if [[ $compositor == "sway" ]]; then
   write_if_changed "$POTATO_CONFIG_HOME/sway/config" <"$POTATO_SHARE/sway/config" && say "wrote sway config"
+  # Own session entry so the no-GPU environment (QT_QUICK_BACKEND=software: Omawrite 175 -> 55 MiB
+  # measured) only applies to the potato sway session, never to Hyprland.
+  root_write_if_changed "$POTATO_SYSROOT/usr/local/share/wayland-sessions/potato-sway.desktop" <"$POTATO_SHARE/sessions/potato-sway.desktop" && say "added the 'Sway (potato)' session"
   root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato.conf" <"$POTATO_SHARE/sddm/zz-potato.conf" && say "SDDM greeter -> weston (pixman)"
   if grep -rqs "^Session=" "$POTATO_SYSROOT/etc/sddm.conf.d/" 2>/dev/null; then
-    printf '[Autologin]\nSession=sway.desktop\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf" && say "autologin session -> sway"
+    printf '[Autologin]\nSession=potato-sway.desktop\n' | root_write_if_changed "$POTATO_SYSROOT/etc/sddm.conf.d/zz-potato-session.conf" && say "autologin session -> sway"
   fi
   # Without autologin the greeter preselects SDDM's last session, which is Omarchy's
   # Hyprland one on a fresh install (seen on 4.0.4). Point it at sway once; later logins keep it.
   state=$POTATO_SYSROOT/var/lib/sddm/state.conf
-  sway_session=/usr/share/wayland-sessions/sway.desktop
+  sway_session=/usr/local/share/wayland-sessions/potato-sway.desktop
   # /var/lib/sddm is sddm-owned and not readable by the user.
   state_txt=$(cat "$state" 2>/dev/null || sudo -n cat "$state" 2>/dev/null || true)
   if [[ -n $state_txt ]] && ! grep -q "^Session=$sway_session" <<<"$state_txt"; then
@@ -116,6 +119,12 @@ if [[ $compositor == "sway" ]]; then
       grep -q '^\[Last\]' <<<"$state_txt" || printf '[Last]\nSession=%s\n' "$sway_session"
     } | root_write_if_changed "$state" && say "greeter preselects the sway session"
   fi
+fi
+
+# 5b. journald size cap (both paths).
+if [[ -d $POTATO_SYSROOT/etc/systemd ]] || (( POTATO_DRY_RUN )); then
+  root_write_if_changed "$POTATO_SYSROOT/etc/systemd/journald.conf.d/90-potato.conf" <"$POTATO_SHARE/journald/90-potato.conf" &&
+    say "journald capped at 50M (active after the next journald restart/reboot)"
 fi
 
 # 6. Firefox: system default prefs for new profiles + user.js in existing ones.

@@ -22,4 +22,6 @@ user_pref("app.shield.optoutstudies.enabled", false);
 user_pref("extensions.autoDisableScopes", 0);
 user_pref("browser.ml.enable", false);
 user_pref("widget.use-xdg-desktop-portal.file-picker", 0);
+user_pref("browser.sessionhistory.max_total_viewers", 0);
+user_pref("network.prefetch-next", false);
 // potato-mode:end
