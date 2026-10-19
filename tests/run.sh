@@ -95,6 +95,7 @@ check "firefox software render on sway" grep -q 'gfx.webrender.software' "$HOME/
 check "firefox system prefs" grep -q '^pref("dom.ipc.processCount", 2);' "$POTATO_SYSROOT/usr/lib/firefox/defaults/pref/potato-mode.js"
 check "web app -> firefox tab" grep -qx 'Exec=omarchy-potato-webapp https://app.hey.com' "$XDG_DATA_HOME/applications/HEY.desktop"
 check "menu extension valid JSON with potato entry" bash -c "jq -e '.potato' '$XDG_CONFIG_HOME/omarchy/extensions/omarchy-menu.jsonc' >/dev/null"
+check "default browser set via mimeapps (4.0.5-safe)" grep -q "xdg-settings set default-web-browser firefox.desktop" "$STUBLOG"
 check "post-update hook installed" test -x "$XDG_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
 after1=$(snapshot)
 "$repo/bin/omarchy-potato-apply" --yes --quiet >/dev/null 2>&1

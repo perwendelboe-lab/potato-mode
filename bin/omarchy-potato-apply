@@ -160,7 +160,9 @@ if have xdg-mime; then
   run xdg-mime default org.pwmt.zathura.desktop application/pdf
   run xdg-mime default imv.desktop image/png image/jpeg image/gif image/webp
 fi
-have xdg-settings && run xdg-settings set default-web-browser firefox.desktop 2>/dev/null || true
+# Omarchy 4.0.5 routes links through omarchy-browser.desktop in hyprland-mimeapps.list and reads the
+# real browser from mimeapps.list; set it there the way omarchy-default-browser does (works on 4.0.4 too).
+have xdg-settings && run env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings set default-web-browser firefox.desktop 2>/dev/null || true
 
 # 10. Post-update hook.
 hook="$POTATO_CONFIG_HOME/omarchy/hooks/post-update.d/potato-mode"
