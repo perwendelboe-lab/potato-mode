@@ -27,3 +27,10 @@ Options: `--with-libreoffice`, `--redetect` (re-run GPU detection), `--force-cha
 
 ## Tests
 `tests/shellcheck.sh` and `tests/run.sh` (fake HOME/sysroot, stubbed pacman/sudo/omarchy; nothing real is touched).
+
+## Test VMs (`vm/`)
+- `vm/run-vm.sh` (plain Arch cloud image) rebuilds `seed.img` from `vm/user-data` + `vm/meta-data` at **every launch**, so it needs
+  `cloud-localds`, `xorriso` or `genisoimage` installed each time. It injects `id_ed25519.pub`. The `arch` password stays locked (ssh key only).
+  `VM_CONSOLE_PASSWORD=1` sets a random console password, kept in the gitignored `vm/.console-password`.
+  The instance-id is a hash of the rendered user-data, so cloud-init re-runs on an existing disk whenever it changes.
+- `vm/omarchy/` drives an Omarchy ISO install in a 1 GB TCG VM (see vm/omarchy/RESULTS.md).
