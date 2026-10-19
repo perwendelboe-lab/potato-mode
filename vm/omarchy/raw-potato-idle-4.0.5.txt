@@ -1,0 +1,25 @@
+# Omarchy 4.0.5 + potato-mode, sway session, one foot open; sway etime:
+      09:56
+               total        used        free      shared  buff/cache   available
+Mem:             940         434          61          16         613         506
+Swap:           1883          14        1869
+NAME       ALGORITHM DISKSIZE  DATA COMPR TOTAL STREAMS MOUNTPOINT
+/dev/zram0 zstd          940M 14.3M  1.2M  2.4M         [SWAP]
+--- top PSS (MiB) / swap (MiB)
+   119     10 sway
+    15      0 systemd-journal
+    13      0 polkit-gnome-au
+    10      0 sddm-helper
+    10      0 foot
+     8      1 sddm
+     8      0 wireplumber
+     8      0 NetworkManager
+     7      0 systemd
+     6      0 swaybar
+     4      0 systemd-udevd
+     4      0 systemd
+     4      0 gvfsd
+     3      0 sshd-session
+     3      0 polkitd
+--- totals
+# (totals line missing: the run was interrupted)
