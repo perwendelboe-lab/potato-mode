@@ -1,0 +1,25 @@
+# Omarchy 4.0.5 + potato defaults (potato session, journald cap) + ALL tune options; ~6 min after login, one foot; sway etime:
+      06:51
+               total        used        free      shared  buff/cache   available
+Mem:             940         411          74          17         608         528
+Swap:           1883           0        1883
+NAME       ALGORITHM DISKSIZE DATA COMPR TOTAL STREAMS MOUNTPOINT
+/dev/zram0 zstd          940M 192K 34.1K  468K         [SWAP]
+--- top PSS (MiB) / swap (MiB)
+   114      8 sway
+    14      0 polkit-gnome-au
+    13      0 NetworkManager
+    10      0 systemd-journal
+    10      0 sddm-helper
+    10      0 sddm
+    10      0 foot
+     9      0 wireplumber
+     7      0 systemd
+     6      0 swaybar
+     5      0 systemd-udevd
+     4      0 systemd
+     4      0 pipewire
+     4      0 gvfsd
+     3      0 sshd-session
+--- totals
+sum PSS 273 MiB, sum swapped 11 MiB
