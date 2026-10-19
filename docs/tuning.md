@@ -1,7 +1,7 @@
 # Lightness tuning: measured savings and proposed defaults (2026-10-19)
 
-Status: research + measurements. **Nothing here has been made a default yet.** The proposals at the end need
-the user's OK. All figures are **box measurements** in the 1 GB TCG VM (Omarchy 4.0.5 + potato-mode, sway on
+Status (updated 2026-10-19): the user approved the defaults and the opt-in command below, and both are **implemented**.
+See "Implemented" at the end. The rest of this file is the original research. All figures are **box measurements** in the 1 GB TCG VM (Omarchy 4.0.5 + potato-mode, sway on
 llvmpipe, 940 MiB visible). They are single samples of PSS via /proc/PID/smaps_rollup (sudo), unless noted otherwise.
 
 ## Baseline: where the memory goes now
@@ -85,3 +85,35 @@ Disabling cups + avahi + ppd together saves about 2–3 MiB. ufw is a oneshot se
 
 **Never by default:** disabling systemd-oomd, NetworkManager, pipewire, polkit agent or the portals;
 changing Omarchy's sysctl/zram values; removing SDDM.
+
+## Implemented (2026-10-19, user-approved)
+### Defaults in `omarchy-potato apply` (reverted by `disable`)
+- **Sway path only:** a root-owned session entry `/usr/local/share/wayland-sessions/potato-sway.desktop` ("Sway (potato)",
+  `Exec=env QT_QUICK_BACKEND=software sway`). The greeter preselects it (SDDM last session, or autologin `Session=` if present).
+  The variable lives only in this session, so the Hyprland path never sees it (tested: on the Hyprland path no session file is written).
+  VM: login selected `potato-sway.desktop`, sway's environment had `QT_QUICK_BACKEND=software`, and Omawrite started with
+  `swaymsg exec` inherited it and used **54.8 MiB PSS** (175 MiB without it).
+- **journald cap** `/etc/systemd/journald.conf.d/90-potato.conf` (`SystemMaxUse=50M`, `SystemMaxFileSize=8M`, `RuntimeMaxUse=16M`).
+  Correction to the earlier figure: journald went to 9.1 MiB right after a restart, but measured **16.7 MiB again after a
+  login**. The resident saving doesn't last (it's mostly file-backed journal pages). What lasts is the disk-size cap.
+- **Firefox:** `browser.sessionhistory.max_total_viewers=0` and `network.prefetch-next=false` in user.js and the system default prefs.
+  RAM effect **not measured**: bfcache only matters when navigating back and forth, and Firefox runs under TCG are too slow
+  to measure that meaningfully.
+
+### `omarchy-potato tune [list|status|enable|disable] <option|--all> [--dry-run] [--yes] [--confirm-fstab]`
+State lives in `~/.local/state/potato-mode-tune/<option>/` (marker, undo list, backups). Every option is idempotent, supports `--dry-run`, and is
+undone by `tune disable <option>`. `omarchy-potato disable` also runs `tune disable --all`.
+
+| Option | What it does | Undo | VM-verified (4.0.5) |
+|---|---|---|---|
+| no-printing | `disable --now` cups.path/socket/service, avahi-daemon.socket/service (only those that were enabled) | re-enable exactly those | ✅ all disabled, inactive after reboot |
+| no-bluetooth | bluetooth.service + user bt-agent.service | re-enable | ✅ |
+| no-power-profiles | power-profiles-daemon.service; warns if a battery is present | re-enable | ✅ |
+| no-a11y | masks user at-spi-dbus-bus.service (it's static/D-Bus activated) | unmask | ✅ masked; no at-spi process after login |
+| hdd | udev rule `60-potato-bfq.rules`: BFQ for rotational `sd*`/`vd*`; records each disk's current scheduler | remove rule, write the old scheduler back | ✅ vda `[bfq]` after reboot |
+| noatime | relatime→noatime (or adds noatime) on btrfs/ext4/ext3/xfs fstab lines; shows a diff; **needs an interactive yes or `--confirm-fstab`** (`--yes` isn't enough); `findmnt --verify` first; backups in `/etc/fstab.potato-bak` + state | restores the backup only if fstab is unchanged since, otherwise warns | ✅ booted with `/` mounted `noatime` |
+| no-xwayland | adds `xwayland disable` to potato's sway config and `xwayland = { enabled = false }` to potato.lua (re-apply keeps it) | removes them | ✅ sway (no `DISPLAY` in the session) · ❌ Hyprland not tested |
+
+Idle with **all** tunings + defaults (4.0.5, about 7 min after login): 411 MiB used, 0 swap, total PSS of all processes 273 MiB
+(raw-potato-idle-4.0.5-tuned.txt). Without them: 434 MiB used after about 10 min. It's one sample each, at different times after login,
+so the difference **isn't significant**. As predicted above, these options mostly free disk, I/O and attack surface, not RAM.
