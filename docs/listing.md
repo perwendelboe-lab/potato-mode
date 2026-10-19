@@ -74,7 +74,7 @@ Note on the Sway path: the Omarchy shell (`omarchy-shell`) is launched from Hypr
 | Public GitHub repo | ❌ private (`perwendelboe-lab/potato-mode`). The visibility decision is the user's. |
 | `manifest.json` at root | ❌ none. It needs a QML entry point, so this means building a companion plugin. |
 | QML entry point / valid kind | ❌ none. potato-mode is bash plus config. |
-| Root README | ✅ `README.md`. It has install (`./install.sh`), revert (`omarchy-potato disable`) and file removal (`install.sh --uninstall`). It should spell out the uninstall order (disable, then `--uninstall`) and list external deps in one place. |
+| Root README | ✅ `README.md`: install (`./install.sh`), revert (`omarchy-potato disable`). An **Uninstall** section (disable, then `./install.sh --uninstall`) was added with this doc, since the flag existed but wasn't documented. Still to do: list external deps in one place. |
 | Root LICENSE | ❌ missing. Without it the validator rejects the repo, and the code isn't legally reusable. |
 | Manifest `license`/`author`/`description`/`version` | ❌ n/a until a manifest exists. There's no project version or tag anywhere. |
 | Versioning / tags | ❌ no git tags, no releases. A compat range exists (`share/potato-mode/compat`: Omarchy 4.0.0 ≤ v < 4.1.0). |
@@ -86,7 +86,7 @@ Note on the Sway path: the Omarchy shell (`omarchy-shell`) is launched from Hypr
 | Baseline capabilities | ⚠️ expect `review-required`: installer (`install.sh`), package-manager (pacman), privilege (sudo), service-management (systemctl), remote-build (AI module). |
 | Scan limits (1,000 files / 8 MiB) | ✅ well under, but `vm/omarchy/raw-*.txt` and the vm scripts add bulk. Consider whether `vm/` belongs in a published repo. |
 
-No local files were added: LICENSE, manifest and version are all decisions (below).
+The only local change is the README Uninstall section, which documents existing behaviour. LICENSE, manifest and version are all decisions (below).
 
 ## Decisions for the user
 

@@ -11,6 +11,12 @@ omarchy-potato status
 omarchy-potato disable             # revert (restores files, reinstalls dropped packages, undoes tunings)
 omarchy-potato tune list           # opt-in: no-printing no-bluetooth hdd noatime no-xwayland no-a11y no-power-profiles
 ```
+## Uninstall
+```
+omarchy-potato disable             # first: revert system changes and tunings
+./install.sh --uninstall           # then: remove ~/.local/share/potato-mode and the ~/.local/bin links
+```
+
 Options: `--with-libreoffice`, `--redetect` (re-run GPU detection), `--force-channel`, `--force-version`, `--keep-packages` (disable).
 
 ## What it does (`bin/omarchy-potato-apply`, idempotent)
