@@ -2,7 +2,7 @@
 
 ## Automated (box)
 - `tests/shellcheck.sh`: clean (ShellCheck 0.11.0).
-- `tests/run.sh`: 127/127 pass. Uses a fake HOME and sysroot with stubbed pacman/sudo/omarchy-*. Covers GPU detection (GLES2 / GLES3 / llvmpipe fixtures), channel/version gate, dry-run touches nothing, the sway and Hyprland paths, idempotent re-apply, the post-update hook re-dropping Chromium and re-pointing web apps, the hook skipping packages on an untested Omarchy version, full revert, and the menu renderer against fixtures and the real Omarchy 4 `omarchy-menu.jsonc`.
+- `tests/run.sh`: 159/159 pass. Uses a fake HOME and sysroot with stubbed pacman/sudo/omarchy-*. Covers GPU detection (GLES2 / GLES3 / llvmpipe fixtures), channel/version gate, dry-run touches nothing, the sway and Hyprland paths, idempotent re-apply, the post-update hook re-dropping Chromium and re-pointing web apps, the hook skipping packages on an untested Omarchy version, full revert, and the menu renderer against fixtures and the real Omarchy 4 `omarchy-menu.jsonc`.
 
 ## In the 1 GB TCG VM (plain Arch, **not Omarchy**; see vm/RESULTS.md)
 - `install.sh` → `omarchy-potato enable --yes --force-channel --force-version` installed the real packages through pacman: OK. `tesseract` couldn't be dropped because `zathura-pdf-mupdf` → `libmupdf` needs it. Switched to `zathura-pdf-poppler`.
@@ -25,6 +25,14 @@
 - `omarchy update -y` to 4.0.5: the post-update hook ran; `check` OK; re-apply with the new grouped drop removed ufw-docker,
   docker and the tesseract pair; greeter on weston and sway login still work. Idle: 434 MiB used, 14 MiB zram.
 - `omarchy update -y` still waits at two `gum confirm` prompts (orphan removal, reboot after a kernel update).
+
+## Defaults + `omarchy-potato tune` (4.0.5 VM, 2026-10-19)
+- Verified: login picks "Sway (potato)" with `QT_QUICK_BACKEND=software` (Omawrite 54.8 MiB PSS); journald cap file; Firefox
+  prefs in user.js and the system prefs; every tune option enabled, survived a reboot (noatime mount, BFQ on vda, units inactive, no
+  `DISPLAY`/Xwayland, no at-spi), then `tune disable --all` restored everything (units, scheduler, udev rule, fstab, sway config).
+- Unattended update workaround (docs/updates.md): orphan prompt skipped, potato hook ran.
+- Not verified: Firefox pref RAM effect; no-xwayland on Hyprland; the reboot prompt in the workaround run (only checked that `gum confirm` without a TTY = no);
+  BFQ on a real HDD.
 
 ## Not tested
 - Hyprland path on real Omarchy: `potato.lua` loading in Hyprland Lua and whether `o.bind` replaces the stock web-app bindings.

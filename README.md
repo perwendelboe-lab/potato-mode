@@ -8,7 +8,8 @@ Omarchy add-on for ~2006 x86_64 hardware (Core 2 / Athlon 64, 1 GB+ RAM, old GPU
 omarchy-potato enable --dry-run    # show every change, touch nothing
 omarchy-potato enable              # check channel/version, then apply
 omarchy-potato status
-omarchy-potato disable             # revert (restores files, reinstalls dropped packages)
+omarchy-potato disable             # revert (restores files, reinstalls dropped packages, undoes tunings)
+omarchy-potato tune list           # opt-in: no-printing no-bluetooth hdd noatime no-xwayland no-a11y no-power-profiles
 ```
 Options: `--with-libreoffice`, `--redetect` (re-run GPU detection), `--force-channel`, `--force-version`, `--keep-packages` (disable).
 
@@ -20,6 +21,8 @@ Options: `--with-libreoffice`, `--redetect` (re-run GPU detection), `--force-cha
 - Web apps: rewrites `~/.local/share/applications` web-app launchers to `omarchy-potato-webapp` (Firefox tab).
 - zram: Omarchy already ships `zram-size = ram`; potato-mode only fills in a config if none exists.
 - Omarchy menu: "Potato mode" submenu via `~/.config/omarchy/extensions/omarchy-menu.jsonc`.
+- Sway path: own "Sway (potato)" session with `QT_QUICK_BACKEND=software` (Qt Quick apps ~120 MiB lighter on llvmpipe); journald capped at 50M; Firefox bfcache/prefetch off.
+- Opt-in `omarchy-potato tune` (docs/tuning.md); unattended updates: docs/updates.md.
 - `post-update` hook re-applies after `omarchy update`; skips package changes if Omarchy left the tested range (`share/potato-mode/compat`).
 
 ## Tests
