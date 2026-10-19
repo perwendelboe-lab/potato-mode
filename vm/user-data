@@ -1,11 +1,11 @@
 #cloud-config
+# Template. run-vm.sh builds seed.img from this at launch: it injects the public key, and
+# (only with VM_CONSOLE_PASSWORD=1) a random console password that is never committed.
 users:
   - name: arch
     sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
     ssh_authorized_keys: [REPLACE_WITH_id_ed25519.pub]
-chpasswd:
-  expire: false
-  users: [{name: arch, password: potato, type: text}]
 ssh_pwauth: false
 runcmd:
   - [systemctl, enable, --now, sshd]

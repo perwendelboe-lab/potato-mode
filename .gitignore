@@ -6,3 +6,4 @@ id_ed25519*
 *.pem
 vm/serial.log
 *.log
+.console-password
