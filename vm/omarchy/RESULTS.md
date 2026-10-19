@@ -76,3 +76,13 @@ Raw output: raw-stock-idle.txt and raw-potato-idle.txt.
 - The potato entry showing in the Quickshell menu (the entry was merged into omarchy-menu.jsonc and parses, but Quickshell
   isn't running on the sway path). The interactive fzf/gum menu.
 - Real 2006 hardware / GLES2 GPUs.
+
+## Update to Omarchy 4.0.5 (2026-10-19)
+- `omarchy update -y` (over ssh with OMARCHY_PATH set) took this VM from 4.0.4-1 to 4.0.5-1, kernel 7.2.5-3 to 7.2.8-9-omarchy, with 313 packages,
+  roughly 50 min under TCG. Even with `-y` it stopped twice at a `gum confirm`: "Remove 1 orphaned package(s)?"
+  (hyprwayland-scanner) and "Linux kernel has been updated. Reboot?". Both were answered by killing gum, then a manual reboot.
+- The potato post-update hook ran during the update on 4.0.5. `omarchy-potato check` reports
+  "Omarchy 4.0.5 on channel stable: OK", which is inside the 4.0.0 to <4.1.0 compat range, so no change was needed.
+- With the new drop logic, apply removed ufw-docker, then docker (with containerd/runc/libpathrs), then
+  tesseract + tesseract-data-eng in one transaction (with leptonica and tesseract-data-osd), freeing about 262 MiB of disk.
+- After reboot the greeter is still on weston, and the SDDM last session is still sway.desktop. Login started sway.
