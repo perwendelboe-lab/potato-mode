@@ -77,7 +77,7 @@ unit_off() { # opt scope unit [mask]
     [[ $st == enabled ]] || return 0
     sysctl_unit "$scope" disable --now "$unit" && undo_add "$opt" "enable $scope $unit"
   fi
-  say "$opt: ${how}d $scope unit $unit"
+  say "$opt: ${how/%mask/maske}d $scope unit $unit"
 }
 
 # Write a root-owned file for an option, backing up anything already there.
@@ -122,10 +122,15 @@ rotational_disks() {
 current_sched() { sed -n 's/.*\[\(.*\)\].*/\1/p' "$POTATO_SYSROOT/sys/block/$1/queue/scheduler" 2>/dev/null; }
 
 fstab_noatime() { # stdin fstab -> stdout with noatime on btrfs/ext4/ext3/xfs mounts
-  awk 'BEGIN{OFS="\t"}
+  # Only the options field changes; the line's spacing is kept.
+  awk '
     /^[[:space:]]*#/ || NF < 4 { print; next }
     $3 ~ /^(btrfs|ext4|ext3|xfs)$/ && $4 !~ /(^|,)(noatime|strictatime|lazytime)(,|$)/ {
-      if ($4 ~ /(^|,)relatime(,|$)/) sub(/relatime/, "noatime", $4); else $4 = "noatime," $4
+      opts = $4
+      if (opts ~ /(^|,)relatime(,|$)/) sub(/relatime/, "noatime", opts); else opts = "noatime," opts
+      i = index($0, $4)
+      print substr($0, 1, i - 1) opts substr($0, i + length($4))
+      next
     }
     { print }'
 }
