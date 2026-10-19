@@ -2,7 +2,7 @@
 
 # omarchy:summary=potato-mode: make Omarchy usable on ~2006 hardware
 # omarchy:group=potato
-# omarchy:args=<enable|disable|apply|status|detect|check|menu|webapp|ai|ask|tune> [options]
+# omarchy:args=<--version|enable|disable|apply|status|detect|check|menu|webapp|ai|ask|tune> [options]
 
 set -euo pipefail
 dir=$(dirname "$(readlink -f "$0")")
@@ -10,6 +10,11 @@ sub=${1:-status}
 shift || true
 case $sub in
   enable | disable | apply | status | detect | check | menu | webapp | ai | ask | tune) exec "$dir/omarchy-potato-$sub" "$@" ;;
+  -V | --version | version)
+    v=$(tr -d '[:space:]' <"$dir/../VERSION" 2>/dev/null) || true
+    [[ -n ${v:-} ]] || { echo "omarchy-potato: VERSION file missing" >&2; exit 1; }
+    echo "potato-mode $v"
+    ;;
   -h | --help | help)
     sed -n 's/^# omarchy:summary=/  /p' "$dir"/omarchy-potato-*
     ;;

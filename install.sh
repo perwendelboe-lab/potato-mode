@@ -12,7 +12,7 @@ if [[ ${1:-} == "--uninstall" ]]; then
   exit 0
 fi
 mkdir -p "$dest" "$bindir"
-cp -a "$src"/bin "$src"/lib "$src"/share "$src"/hooks "$dest"/
+cp -a "$src"/bin "$src"/lib "$src"/share "$src"/hooks "$src"/VERSION "$src"/LICENSE "$dest"/
 for f in "$dest"/bin/omarchy-potato*; do
   ln -sf "$f" "$bindir/$(basename "$f")"
 done

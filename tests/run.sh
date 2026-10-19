@@ -402,6 +402,16 @@ teardown
 chars=$(wc -c <"$repo/share/potato-mode/ai/mini-skill.md"); words=$(wc -w <"$repo/share/potato-mode/ai/mini-skill.md")
 check "mini-skill <= 500 tokens (chars/4=$((chars / 4)), words=$words)" bash -c "(( $chars / 4 <= 500 && $words <= 375 ))"
 
+# --version: reads VERSION (repo and installed copy via symlink)
+v=$("$repo/bin/omarchy-potato" --version 2>&1); check "--version prints VERSION ($v)" test "$v" = "potato-mode $(tr -d '[:space:]' <"$repo/VERSION")"
+check "VERSION is semver" grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' "$repo/VERSION"
+vt=$(mktemp -d)
+POTATO_INSTALL_DIR=$vt/share POTATO_BIN_DIR=$vt/bin "$repo/install.sh" >/dev/null 2>&1
+v2=$("$vt/bin/omarchy-potato" --version 2>&1); check "--version works from installed symlink ($v2)" test "$v2" = "$v"
+mv "$vt/share/VERSION" "$vt/share/VERSION.x"
+"$vt/bin/omarchy-potato" --version >/dev/null 2>&1; check "--version fails without VERSION file" [ $? -ne 0 ]
+rm -rf "$vt"
+
 echo "---"
 echo "passed: $pass  failed: $fail"
 (( fail == 0 ))
