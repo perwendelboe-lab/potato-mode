@@ -1,6 +1,6 @@
 # Local AI for potato-mode (evaluation, 2026-10-16)
 
-Status: **recommendation, not implemented.** The base stays at 1 GB and keeps Codex CLI (cloud) as the default agent. Local AI would be an **optional module, gated on 2 GB of RAM or more**.
+Status: the base stays at 1 GB and keeps Codex CLI (cloud) as the default agent. Local AI is an **optional module, off by default and gated on 2 GB of RAM or more**.
 
 ## 1. What sybil-solutions/omarchy-local-ai is (ref clone: /workspace/ref/omarchy-local-ai @ 55b2342, v6.18.0)
 - A Quattro-shell bar plugin (QML panel + one bash backend, `bin/omarchy-local-ai`). It runs engines (llama.cpp, SGLang, vLLM, TabbyAPI) in **Docker**, with images pinned by digest from ghcr.io. Each engine sits behind a keyed OpenAI/Anthropic/Responses gateway on 127.0.0.1:12434+. It opens pi, Claude Code, **Codex**, OpenCode, Crush, etc., pointed at that gateway.
@@ -59,7 +59,7 @@ Consequence: prompt processing is the bottleneck. The full Omarchy SKILL.md (~3k
 4. Model: Bonsai-2-2B **PTQ1_0** (smallest and fastest here). The fallback is Q2_0 on upstream llama.cpp if the fork goes stale; it is 2.5× slower and +110 MiB.
 5. Do **not** include sybil-solutions/omarchy-local-ai (AVX2/Docker/4 GB/telemetry).
 
-## 6. Implementation (branch `local-ai`)
+## 6. Implementation
 Decisions taken on 2026-10-16: the skill ships in the base, the module is opt-in and needs ≥2 GB, the build runs on the target from a pinned commit, the model is Bonsai-2-2B PTQ1_0, Q2_0 on upstream is the fallback, and omarchy-local-ai is dropped.
 
 - **Base (`omarchy-potato apply`)** symlinks Omarchy's skill (`$OMARCHY_PATH/default/agents/skills/omarchy`) to `~/.agents/skills/omarchy` if nothing is already there. It writes the `potato-mode` addendum skill (`share/potato-mode/skills/potato-mode/SKILL.md`). `disable` removes both, and also removes the AI module if present.
@@ -67,10 +67,29 @@ Decisions taken on 2026-10-16: the skill ships in the base, the module is opt-in
   - *Preflight:* MemTotal ≥ 1,800,000 kB (a "2 GB" machine), SSE3, ≥1.5 GB free disk, toolchain (installs `base-devel cmake git curl jq` after a confirm), and reachability of the pinned repo and model URL.
   - *Build:* `git fetch --depth 1 <url> <commit>`, then verify `HEAD == pin`. cmake uses `GGML_NATIVE=OFF`. Each of AVX/AVX2/FMA/F16C/BMI2/SSE4.2 is ON only if `/proc/cpuinfo` lists it, with `-march=core2` for SSSE3 CPUs and AVX512 always off. The build runs `nice -n 19 ionice -c3`, `-j1` (or `-j2` at ≥3.5 GB) under `timeout 6h`, logged to `~/.local/state/potato-mode/ai/logs/build-*.log`. Only the `llama-server` target is built.
   - *Model:* resumable `curl -C -` into `.part` from the pinned HF revision. The SHA-256 must match before the file is moved into place.
-  - *Smoke test:* `llama-server --version` (this catches illegal instructions), then load the model, get a 4-token chat completion, and check peak VmHWM ≤ 900,000 kB.
+  - *Smoke test:* `llama-server --version` (this catches illegal instructions), then load the model with the selected context and q8 KV, get a 4-token chat completion, and check peak VmHWM ≤ 900,000 kB.
   - *On failure:* the step, message and log path go to `last-build` (shown by `ai status`), and the module stays disabled. Fetched source with a wrong commit, a bad-checksum model or a crashing binary is deleted. Interrupted downloads and partial builds are kept so a retry resumes. The error message offers a retry and `--fallback`. Base potato-mode files are never touched.
+- **Context presets (`2048`, `4096`, `8192` only):** `ai enable` prompts with `gum choose` when interactive, recommending 2048 for a 2 GB machine. `--yes` or a noninteractive run defaults to 2048. A valid `POTATO_AI_CTX` overrides the prompt/default; an empty or invalid value is rejected before any build or state change. The choice is stored atomically as `ctx=` beside `variant=`, `server=` and `model=` in the enabled state file (never sourced). `ai status` prints the saved context (not a temporary environment override).
+  - `ask` resolves context as `POTATO_AI_CTX` > persisted `ctx=` > legacy default 2048. An invalid env value or an invalid/duplicate persisted value (when no env override is set) fails before the server or timestamp is touched.
+  - Every runtime start uses the same KV-cache flags alongside the chosen context: `-fa on -ctk q8_0 -ctv q8_0`. The option parser supports these at both pinned commits: [Prism source](https://github.com/PrismML-Eng/llama.cpp/blob/5ae2e169eac202d2f065606539c3ad6ab8b51333/common/arg.cpp) and [fallback source](https://github.com/ggml-org/llama.cpp/blob/7182ef71e6d5dd0c8ea76486fac134fcd25025d4/common/arg.cpp). The existing Prism binary at the pin also lists them in `--help`. This verifies flags, not model inference or compatibility on every target CPU; no inference was reproduced for this change.
 - **`omarchy-potato-ask "<question>"`** (also `omarchy-potato ask`):
-  - It starts llama-server on demand on 127.0.0.1:12480 (`-c 2048`, nice 10) and sends the ≤500-token mini-skill (`share/potato-mode/ai/mini-skill.md`) with thinking off, max 256 tokens, and one `run` tool.
-  - Each proposed command is shown and runs **only after confirmation**. `--dry-run` never runs anything.
-  - A watchdog stops the server after 600 s idle (`POTATO_AI_IDLE`). `--stop` stops it now.
-- **Tests (`tests/run.sh`, stubbed git/cmake/curl/server):** RAM refusal, dry-run without changes, no AVX on Core 2 flags, AVX2 only when present, the success path, disable, every failure path (network, toolchain, disk, wrong commit, build error, timeout, checksum, interrupted download, illegal instruction, RSS limit, no generation), resume without re-fetch, `--fallback`, ask confirm/deny/dry-run/thinking-off, and the mini-skill token budget.
+  - It starts llama-server on demand on 127.0.0.1:12480 (nice 10) with the resolved context and q8 KV flags, then sends the ≤500-token mini-skill (`share/potato-mode/ai/mini-skill.md`) with thinking off, max 256 tokens, and one `run` tool.
+  - Each proposed command is shown and runs **only after confirmation**. `--dry-run` never executes proposed commands; it still starts the model and generates an answer.
+  - A watchdog stops the **original** server after 600 s idle (`POTATO_AI_IDLE`); `--stop` stops it now. Process ownership is PID + `/proc/PID/stat` start time + the exact `/proc/PID/cmdline` hash, recorded when the server starts. Mismatched or legacy live process identities are left alone; `--stop` reports refusal with a nonzero exit status. AI module disable also refuses to delete state/model files when stopping is refused. Confirm legacy processes manually rather than stopping an unrelated program.
+  - Start/stop are serialized with `flock` (child server and watchdog descriptors are closed so they cannot keep the lock). A running server is reused only when its context, cache flags, model and port still match. If any of those changed, `ask` fails closed and tells the user to run `--stop`; it never kills or reloads automatically.
+  - A healthy port with no matching owned metadata is treated as unverified and is never accepted as potato-mode's server.
+- **Tests (`tests/run.sh`, stubbed git/cmake/curl/server, no downloads or inference):** RAM refusal, dry-run without changes, no AVX on Core 2 flags, AVX2 only when present, the success path, disable, every failure path (network, toolchain, disk, wrong commit, build error, timeout, checksum, interrupted download, illegal instruction, RSS limit, no generation), resume without re-fetch, `--fallback`, ask confirm/deny/dry-run/thinking-off, the mini-skill token budget, invalid contexts (env and persisted), env precedence, context persistence, legacy state, noninteractive default, 8192 flags, matching reuse, changed-context refusal, an unrelated live PID not being killed, and watchdog replacement safety.
+
+### Context and memory, user-reported (unverified)
+One user on an **i5-5300U, 7.6 GiB RAM, 2 threads, `--jinja`, Bonsai-2-2B PTQ1_0** reported idle/peak RSS (MB):
+
+| Context | KV cache | Idle / peak MB |
+|---|---|---|
+| 2048 | not stated as q8 | 659 / 725 |
+| 4096 | not stated as q8 | 681 / 751 |
+| 8192 | not stated as q8 | 755 / 806 |
+| 8192 | q8_0 / q8_0 | 694 / 762 |
+
+These numbers are a **single-machine user report, not reproduced** here. The first three rows were reported without q8 KV; only the last row was reported with q8 KV at 8192. Do not assume the first three figures apply to q8 KV. Runtime now uses `-fa on -ctk q8_0 -ctv q8_0` for all presets.
+
+2048 is adequate for simple Omarchy questions, themes and model selection. More input tokens can mean minutes on older CPUs: the user reported a half-filled 8k context taking minutes, and a short dry-run first answer taking about 2 minutes. Neither is universal.

@@ -9,12 +9,12 @@ Omarchy add-on for ~2006 x86_64 hardware (Core 2 / Athlon 64, 1 GB+ RAM, old GPU
 > project isn't listed in the plugin marketplace (see `docs/listing.md`).
 
 ## Status / caveats
-- **Early (0.1.0) and untested on real ~2006 hardware.** Every measurement so far comes from 1 GB QEMU/TCG VMs
+- **Early (0.1.0) and untested on real ~2006 hardware.** Base desktop measurements come from 1 GB QEMU/TCG VMs
   (llvmpipe, no real GPU, no HDD). Real Core 2 / Athlon 64 machines, old GPUs, and spinning disks haven't been tried.
 - Tested only on Omarchy 4.0.4 and 4.0.5. Versions outside the accepted range (4.0.0 up to, not including, 4.1.0) are refused unless you pass `--force-version`.
 - It changes system state: it removes and installs packages, writes files under `/etc` and `/usr/local`, and changes SDDM's
   last session. Run `omarchy-potato enable --dry-run` first. `omarchy-potato disable` restores what it changed.
-- The optional local-AI module (`omarchy-potato ai`) builds llama.cpp from source and downloads a ~430 MB model.
+- The optional local-AI module (`omarchy-potato ai`) builds llama.cpp from source and downloads a ~430 MB model. Runtime uses q8 KV cache (`-fa on -ctk q8_0 -ctv q8_0`); context presets are 2048, 4096 or 8192. 2048 is enough for simple Omarchy questions, themes and model selection; larger contexts can take minutes on old CPUs. Memory figures in `docs/local-ai.md` are one unverified user report, not reproduced here.
 
 ## Install
 ```
@@ -25,6 +25,17 @@ omarchy-potato status
 omarchy-potato disable             # revert (restores files, reinstalls dropped packages, undoes tunings)
 omarchy-potato tune list           # opt-in: no-printing no-bluetooth hdd noatime no-xwayland no-a11y no-power-profiles
 ```
+## Optional local AI (2 GB+ RAM)
+```bash
+omarchy-potato ai enable           # interactive: 2048 (2 GB recommendation), 4096 or 8192
+omarchy-potato-ask "switch to the nord theme"
+omarchy-potato-ask --stop          # stop the owned server before changing context
+POTATO_AI_CTX=4096 omarchy-potato-ask "..."  # temporary override, not persisted
+omarchy-potato ai status           # shows the saved context
+```
+Noninteractive enable defaults to 2048 unless `POTATO_AI_CTX` is set. All presets use q8 KV.
+See [local AI](docs/local-ai.md) for precedence, lifecycle safety and reported memory/timings.
+
 ## Uninstall
 ```
 omarchy-potato disable             # first: revert system changes and tunings
