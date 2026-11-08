@@ -9,6 +9,8 @@
 set -euo pipefail
 # shellcheck source=../lib/potato-common.sh
 source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+# shellcheck source=../lib/potato-ai.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-ai.sh"
 
 AI_STATE=$POTATO_STATE/ai
 PORT=${POTATO_AI_PORT:-12480}
@@ -16,50 +18,179 @@ IDLE=${POTATO_AI_IDLE:-600}
 START_WAIT=${POTATO_AI_START_WAIT:-180}
 URL=http://127.0.0.1:$PORT
 pidfile=$AI_STATE/server.pid
+meta=$AI_STATE/server.meta
 stamp=$AI_STATE/last-used
 
-server_alive() { [[ -f $pidfile ]] && kill -0 "$(<"$pidfile")" 2>/dev/null; }
+server_health() { curl -fs --max-time 5 "$URL/health" >/dev/null 2>&1; }
 
-stop_server() {
-  if server_alive; then kill "$(<"$pidfile")" 2>/dev/null || true; fi
-  rm -f -- "$pidfile"
+legacy_pid_alive() {
+  local pid
+  [[ -f $pidfile ]] || return 1
+  pid=$(<"$pidfile")
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null
 }
 
-# Background loop: stop the server once it has been idle for $IDLE seconds.
+lock_server() {
+  mkdir -p "$AI_STATE"
+  exec 9>"$AI_STATE/server.lock"
+  flock 9
+}
+
+unlock_server() {
+  flock -u 9
+  exec 9>&-
+}
+
+remove_server_state_if() {
+  local pid=$1 start=$2 hash=$3
+  potato_ai_meta_describes "$meta" "$pid" "$start" "$hash" && rm -f -- "$meta"
+  [[ -f $pidfile && $(<"$pidfile") == "$pid" ]] && rm -f -- "$pidfile"
+  return 0
+}
+
+stop_server_locked() {
+  local pid start hash
+  if potato_ai_meta_trusted "$meta"; then
+    pid=$(potato_ai_meta_get "$meta" pid)
+    start=$(potato_ai_meta_get "$meta" starttime)
+    hash=$(potato_ai_meta_get "$meta" cmdline_sha256)
+    if potato_ai_stop_identity "$pid" "$start" "$hash"; then
+      remove_server_state_if "$pid" "$start" "$hash"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      remove_server_state_if "$pid" "$start" "$hash"
+      return 0
+    fi
+    warn "not stopping pid $pid: process identity or command line changed; left it alone"
+    return 1
+  fi
+  if legacy_pid_alive; then
+    warn "not stopping pid $(<"$pidfile"): legacy/unknown server metadata is not trusted"
+    return 1
+  fi
+  rm -f -- "$meta" "$pidfile"
+  return 0
+}
+
+stop_server() {
+  local rc=0
+  [[ -d $AI_STATE ]] || return 0
+  lock_server
+  stop_server_locked || rc=$?
+  unlock_server
+  return "$rc"
+}
+
+# Background loop: stop the original server once it has been idle for $IDLE
+# seconds. Never stop a replacement that reused the PID or metadata.
 watchdog() {
-  while server_alive; do
+  local pid=$1 start=$2 hash=$3 last now
+  while :; do
     sleep "${POTATO_AI_WATCH_EVERY:-30}"
-    local last now
+    kill -0 "$pid" 2>/dev/null || return 0
+    [[ $(potato_ai_proc_starttime "$pid" 2>/dev/null) == "$start" ]] || return 0
+    [[ $(potato_ai_proc_cmdline_hash "$pid" 2>/dev/null) == "$hash" ]] || return 0
     last=$(stat -c %Y "$stamp" 2>/dev/null || echo 0)
     now=$(date +%s)
-    if (( now - last >= IDLE )); then stop_server; break; fi
+    if (( now - last >= IDLE )); then
+      lock_server
+      if potato_ai_stop_identity "$pid" "$start" "$hash"; then
+        remove_server_state_if "$pid" "$start" "$hash"
+      fi
+      unlock_server
+      return 0
+    fi
   done
 }
 
 wait_ready() {
   local i
   for (( i = 0; i < START_WAIT; i++ )); do
-    curl -fs --max-time 5 "$URL/health" >/dev/null 2>&1 && return 0
-    server_alive || die "local model is not running; see $AI_STATE/server.log"
+    potato_ai_owned_alive "$meta" || return 1
+    if server_health && potato_ai_owned_alive "$meta"; then
+      return 0
+    fi
     sleep 1
   done
   return 1
 }
 
 start_server() {
-  local server model threads
+  local server model threads pid start hash prev cur i
   server=$(sed -n 's/^server=//p' "$AI_STATE/enabled")
   model=$(sed -n 's/^model=//p' "$AI_STATE/enabled")
   [[ -x $server && -f $model ]] || die "local AI files are missing; re-run: omarchy-potato ai enable"
   threads=$(nproc 2>/dev/null || echo 2)
-  say "starting local model (first answer can take a minute on old hardware)"
-  setsid nice -n 10 "$server" -m "$model" --host 127.0.0.1 --port "$PORT" -c 2048 -t "$threads" --jinja \
+  say "starting local model (context $ctx; first answer can take a minute on old hardware)"
+  setsid nice -n 10 "$server" -m "$model" --host 127.0.0.1 --port "$PORT" -c "$ctx" -t "$threads" --jinja \
+    -fa on -ctk q8_0 -ctv q8_0 \
     --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 --presence-penalty 1.5 \
-    >>"$AI_STATE/server.log" 2>&1 </dev/null &
-  echo $! >"$pidfile"
-  wait_ready || { stop_server; die "local model did not become ready in ${START_WAIT}s; see $AI_STATE/server.log"; }
+    >>"$AI_STATE/server.log" 2>&1 </dev/null 9>&- &
+  pid=$!
+  # Capture the /proc start time immediately at spawn so every stop path for
+  # this pid can verify its identity first.
+  start=$(potato_ai_proc_starttime "$pid" 2>/dev/null || true)
+  # Wait for the exec chain to settle, then record its exact command line.
+  prev=""
+  for (( i = 0; i < 20; i++ )); do
+    kill -0 "$pid" 2>/dev/null || break
+    cur=$(potato_ai_proc_cmdline_hash "$pid" 2>/dev/null || true)
+    [[ -n $cur && $cur == "$prev" ]] && break
+    prev=$cur
+    sleep 0.1
+  done
+  hash=$(potato_ai_proc_cmdline_hash "$pid" 2>/dev/null || true)
+  cur=$(potato_ai_proc_starttime "$pid" 2>/dev/null || true)
+  if [[ -z $start || -z $hash || $cur != "$start" ]]; then
+    # The child is gone or its pid no longer describes what we saved. Never a
+    # raw kill: potato_ai_stop_identity only kills a verified, exact match.
+    potato_ai_stop_identity "$pid" "$start" "${hash:-}" || true
+    rm -f -- "$meta" "$pidfile"
+    die "local model failed to start; see $AI_STATE/server.log"
+  fi
+  potato_ai_write_meta "$meta" "$pid" "$start" "$hash" "$ctx" "$PORT" "$server" "$model"
+  potato_ai_write_pid "$pidfile" "$pid"
+  if ! wait_ready; then
+    potato_ai_stop_identity "$pid" "$start" "$hash" || true
+    remove_server_state_if "$pid" "$start" "$hash"
+    die "local model did not become ready in ${START_WAIT}s; see $AI_STATE/server.log"
+  fi
   touch "$stamp"
-  setsid "$0" --watchdog >/dev/null 2>&1 </dev/null &
+  setsid "$0" --watchdog "$pid" "$start" "$hash" >/dev/null 2>&1 </dev/null 9>&- &
+}
+
+ensure_server() {
+  local server model pid
+  server=$(sed -n 's/^server=//p' "$AI_STATE/enabled")
+  model=$(sed -n 's/^model=//p' "$AI_STATE/enabled")
+  if potato_ai_meta_trusted "$meta"; then
+    if potato_ai_owned_alive "$meta"; then
+      if potato_ai_meta_matches "$meta" "$ctx" "$PORT" "$server" "$model"; then
+        wait_ready || die "local model stopped before it was ready; see $AI_STATE/server.log"
+        return 0
+      fi
+      die "local model is already running with a different context, cache, model or port; not restarting it. Stop it first: omarchy-potato-ask --stop"
+    fi
+    # Trusted metadata that no longer describes a live process: fail closed.
+    # The recorded pid may have been reused by an unrelated process, so it is
+    # never cleared or killed while it is alive.
+    pid=$(potato_ai_meta_get "$meta" pid)
+    if kill -0 "$pid" 2>/dev/null; then
+      die "saved server pid $pid is alive but its identity no longer matches $meta; not touching it. Verify the process manually; do not stop unrelated programs. Remove stale metadata only after confirming it is no longer potato-mode's server"
+    fi
+    server_health && die "port $PORT is served by an unverified process; refusing to reuse it"
+    rm -f -- "$meta" "$pidfile"
+    start_server
+    return 0
+  fi
+  if legacy_pid_alive; then
+    die "local model pid $(<"$pidfile") has legacy/unknown metadata; not touching it. Stop it manually, then retry"
+  fi
+  server_health && die "port $PORT already has a healthy server not started by potato-mode; refusing to reuse this unverified server"
+  rm -f -- "$meta" "$pidfile"
+  start_server
 }
 
 confirm() {
@@ -71,31 +202,39 @@ confirm() {
 }
 
 yes=0 question=""
-for arg in "$@"; do
-  case $arg in
-    --watchdog) watchdog; exit 0 ;;
+while (( $# )); do
+  case $1 in
+    --watchdog)
+      [[ $# -ge 4 ]] || die "usage: omarchy-potato-ask --watchdog PID STARTTIME CMDLINE_HASH"
+      watchdog "$2" "$3" "$4"
+      exit 0 ;;
     --stop) stop_server; exit 0 ;;
     --dry-run) POTATO_DRY_RUN=1 ;;
     --yes) yes=1 ;;
-    -*) die "unknown option: $arg" ;;
-    *) question+="${question:+ }$arg" ;;
+    -*) die "unknown option: $1" ;;
+    *) question+="${question:+ }$1" ;;
   esac
+  shift
 done
 [[ -n $question ]] || die 'usage: omarchy-potato-ask [--dry-run] [--yes] "<question>"'
 [[ -f $AI_STATE/enabled ]] || die "local AI is not enabled (needs >= 2 GB RAM): omarchy-potato ai enable"
 have jq || die "jq is required"
 
-if [[ -z ${POTATO_AI_NO_SERVER:-} ]]; then
-  mkdir -p "$AI_STATE"
-  # One starter at a time; a running-but-busy server is waited for, never duplicated.
-  exec 9>"$AI_STATE/server.lock"
-  flock 9
-  if server_alive; then
-    wait_ready
-  else
-    start_server
+if ! ctx=$(potato_ai_resolve_ctx "$AI_STATE/enabled"); then
+  die "malformed context in $AI_STATE/enabled (duplicate ctx= lines; expected exactly one of 2048, 4096 or 8192)"
+fi
+if ! potato_ai_valid_ctx "$ctx"; then
+  if [[ -v POTATO_AI_CTX ]]; then
+    die "invalid POTATO_AI_CTX '$ctx' (use 2048, 4096 or 8192)"
   fi
-  flock -u 9
+  die "invalid context '$ctx' in $AI_STATE/enabled (use 2048, 4096 or 8192)"
+fi
+
+if [[ -z ${POTATO_AI_NO_SERVER:-} ]]; then
+  # One starter/stopper at a time; a matching running server is reused.
+  lock_server
+  ensure_server
+  unlock_server
 fi
 touch "$stamp"
 

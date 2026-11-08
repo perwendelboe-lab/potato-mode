@@ -9,6 +9,8 @@
 set -euo pipefail
 # shellcheck source=../lib/potato-common.sh
 source "$(dirname "$(readlink -f "$0")")/../lib/potato-common.sh"
+# shellcheck source=../lib/potato-ai.sh
+source "$(dirname "$(readlink -f "$0")")/../lib/potato-ai.sh"
 # shellcheck source=../share/potato-mode/ai/pins.sh
 source "$POTATO_SHARE/ai/pins.sh"
 
@@ -181,7 +183,8 @@ smoke() {
   (( POTATO_DRY_RUN )) && { say "would smoke-test $build_dir/bin/llama-server"; return 0; }
   local bin=$build_dir/bin/llama-server port=$(( 18000 + RANDOM % 1000 )) pid peak=0 hwm i ok=0
   "$bin" --version >>"$log" 2>&1 || { rm -f -- "$bin"; fail "binary does not run (illegal instruction? see log); removed it"; }
-  "$bin" -m "$models_dir/$model_file" --host 127.0.0.1 --port "$port" -c 512 -t 2 --jinja >>"$log" 2>&1 &
+  "$bin" -m "$models_dir/$model_file" --host 127.0.0.1 --port "$port" -c "$ctx" -t 2 --jinja \
+    -fa on -ctk q8_0 -ctv q8_0 >>"$log" 2>&1 &
   pid=$!
   for (( i = 0; i < SMOKE_TIMEOUT; i++ )); do
     kill -0 "$pid" 2>/dev/null || break
@@ -205,7 +208,22 @@ smoke() {
   smoke_rss=$peak
 }
 
+choose_context() {
+  if [[ -v POTATO_AI_CTX ]]; then
+    ctx=$POTATO_AI_CTX
+    potato_ai_valid_ctx "$ctx" || die "invalid POTATO_AI_CTX '$ctx' (use 2048, 4096 or 8192)"
+  elif (( ! yes && ! POTATO_DRY_RUN )) && [[ -t 0 ]] && have gum; then
+    ctx=$(gum choose --header "Context size (2048 recommended for 2 GB; larger is slower)" 2048 4096 8192) || { say "cancelled"; exit 0; }
+    potato_ai_valid_ctx "$ctx" || die "invalid context choice '$ctx' (use 2048, 4096 or 8192)"
+  else
+    ctx=2048
+  fi
+  say "local AI context: $ctx tokens (KV cache q8_0; 2048 is enough for simple questions)"
+}
+
 do_enable() {
+  local ctx
+  choose_context
   (( POTATO_DRY_RUN )) || mkdir -p "$AI_STATE/logs"
   log=$AI_STATE/logs/build-$(date +%Y%m%d-%H%M%S).log
   (( POTATO_DRY_RUN )) && log=/dev/stdout
@@ -221,23 +239,38 @@ do_enable() {
   smoke
   trap - ERR
   if (( POTATO_DRY_RUN )); then say "dry run complete, nothing changed"; return 0; fi
-  printf 'variant=%s\nserver=%s\nmodel=%s\n' "$variant" "$build_dir/bin/llama-server" "$models_dir/$model_file" >"$AI_STATE/enabled"
+  potato_ai_write_enabled "$AI_STATE/enabled" "$variant" "$build_dir/bin/llama-server" "$models_dir/$model_file" "$ctx"
   record "result=ok" "step=done" "variant=$variant" "time=$(date -Is)" "log=$log" "peak_rss_kb=$smoke_rss"
-  say "local AI enabled ($variant, smoke-test peak RSS ${smoke_rss} kB). Try: omarchy-potato-ask \"switch to the nord theme\""
+  say "local AI enabled ($variant, context $ctx, smoke-test peak RSS ${smoke_rss} kB). Try: omarchy-potato-ask \"switch to the nord theme\""
 }
 
 do_disable() {
-  "$POTATO_ROOT/bin/omarchy-potato-ask" --stop >/dev/null 2>&1 || true
+  if (( POTATO_DRY_RUN )); then
+    say "would stop the owned local AI server"
+  else
+    "$POTATO_ROOT/bin/omarchy-potato-ask" --stop || die "local AI server could not be safely stopped; keeping its state and files"
+  fi
   [[ -f $AI_STATE/enabled ]] && run rm -f -- "$AI_STATE/enabled"
   [[ -d $AI_HOME ]] && run rm -rf -- "$AI_HOME"
   say "local AI disabled and its build/model files removed (build tools left installed)"
 }
 
 do_status() {
+  local ctx legacy=0 pid
   if [[ -f $AI_STATE/enabled ]]; then
     echo "local ai:    enabled ($(sed -n 's/^variant=//p' "$AI_STATE/enabled"))"
+    grep -q '^ctx=' "$AI_STATE/enabled" || legacy=1
+    ctx=$(potato_ai_enabled_ctx "$AI_STATE/enabled") || ctx=malformed
+    if ! potato_ai_valid_ctx "$ctx"; then
+      echo "context:     invalid ($ctx; expected 2048, 4096 or 8192)"
+    elif (( legacy )); then
+      echo "context:     $ctx (legacy default)"
+    else
+      echo "context:     $ctx"
+    fi
   else
     echo "local ai:    disabled"
+    echo "context:     n/a"
   fi
   if [[ -f $AI_STATE/last-build ]]; then
     echo "last build:  $(paste -sd' ' "$AI_STATE/last-build")"
@@ -246,7 +279,14 @@ do_status() {
   fi
   local kb; kb=$(mem_kb)
   if (( kb >= POTATO_AI_MIN_KB )); then echo "ram:         ${kb} kB (ok)"; else echo "ram:         ${kb} kB (below 2 GB; module unavailable)"; fi
-  [[ -f $AI_STATE/server.pid ]] && kill -0 "$(<"$AI_STATE/server.pid")" 2>/dev/null && echo "server:      running (pid $(<"$AI_STATE/server.pid"))"
+  if potato_ai_meta_trusted "$AI_STATE/server.meta" && potato_ai_owned_alive "$AI_STATE/server.meta"; then
+    echo "server:      running (pid $(potato_ai_meta_get "$AI_STATE/server.meta" pid))"
+  elif [[ -f $AI_STATE/server.pid ]]; then
+    pid=$(<"$AI_STATE/server.pid")
+    if [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "server:      running (pid $pid; unverified metadata, not managed)"
+    fi
+  fi
   return 0
 }
 

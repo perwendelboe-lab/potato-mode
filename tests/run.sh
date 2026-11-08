@@ -10,6 +10,7 @@ fail=0
 ok() { pass=$((pass + 1)); echo "ok   - $1"; }
 not_ok() { fail=$((fail + 1)); echo "FAIL - $1"; [[ -n ${2:-} ]] && echo "$2" | sed 's/^/       /'; }
 check() { local name="$1"; shift; if "$@"; then ok "$name"; else not_ok "$name"; fi; }
+failed_with() { (( $1 != 0 )) && [[ $2 == *"$3"* ]]; }
 
 setup() {
   T=$(mktemp -d)
@@ -46,7 +47,7 @@ S
   export PATH="$T/stubs:$repo/bin:/usr/bin:/bin"
   export POTATO_EGLINFO_OUTPUT=$repo/tests/fixtures/eglinfo-gles2.txt
 }
-teardown() { rm -rf "$T"; unset POTATO_COMPOSITOR; }
+teardown() { rm -rf "$T"; unset POTATO_COMPOSITOR FAKE_HEALTH_FILE FAKE_SERVER_LOG FAKE_SERVER_ARGS; }
 
 snapshot() { (cd "$T" && find home root pacdb -type f ! -name applied-at -exec md5sum {} + | sort); }
 
@@ -281,7 +282,7 @@ echo "cmake $*" >>"$STUBLOG"
 if [[ $1 == --build ]]; then
   [[ -n ${FAKE_BUILD_RC:-} ]] && exit "$FAKE_BUILD_RC"
   mkdir -p "$2/bin"
-  printf '#!/bin/bash\n[[ $1 == --version ]] && { [[ -n ${FAKE_SERVER_BROKEN:-} ]] && exit 132; echo fake; exit 0; }\nexec sleep 30\n' >"$2/bin/llama-server"
+  printf '#!/bin/bash\necho "llama-server $*" >>"$STUBLOG"\n[[ $1 == --version ]] && { [[ -n ${FAKE_SERVER_BROKEN:-} ]] && exit 132; echo fake; exit 0; }\nexec sleep 30\n' >"$2/bin/llama-server"
   chmod +x "$2/bin/llama-server"
 fi
 exit "${FAKE_CONF_RC:-0}"
@@ -295,7 +296,10 @@ if [[ $args == *-o* ]]; then
   while (( $# )); do [[ $1 == -o ]] && { cp "$FAKE_MODEL" "$2"; break; }; shift; done; exit 0
 fi
 [[ $args == *-fsIL* ]] && exit "${FAKE_NET_RC:-0}"
-[[ $args == */health* ]] && exit 0
+if [[ $args == */health* ]]; then
+  [[ -z ${FAKE_HEALTH_FILE:-} || -f $FAKE_HEALTH_FILE ]] && exit 0
+  exit 7
+fi
 if [[ $args == *chat/completions* ]]; then
   [[ -n ${FAKE_CHAT_FAIL:-} ]] && exit 7
   cat "${FAKE_REPLY_FILE:-$FAKE_DEFAULT_REPLY}"; exit 0
@@ -334,6 +338,7 @@ ai_setup
 out=$("$repo/bin/omarchy-potato-ai" enable --yes 2>&1); rc=$?
 check "ai enable succeeds (stubbed build)" [ $rc -eq 0 ] || echo "$out"
 check "ai enabled state written" grep -q '^variant=prism-ptq1_0' "$AIST/enabled"
+check "ai enable persists default context 2048" grep -qx 'ctx=2048' "$AIST/enabled"
 check "ai status shows ok with RSS" bash -c "'$repo/bin/omarchy-potato-ai' status | grep -q 'result=ok.*peak_rss_kb='"
 check "ai build log written" bash -c "ls '$AIST'/logs/build-*.log >/dev/null"
 "$repo/bin/omarchy-potato-ai" disable >/dev/null 2>&1
@@ -376,6 +381,192 @@ teardown
 ai_setup
 out=$("$repo/bin/omarchy-potato-ai" enable --fallback --dry-run 2>&1)
 check "ai --fallback uses upstream + Q2_0" bash -c "grep -q ggml-org/llama.cpp <<<'$out' && grep -q Q2_0.gguf <<<'$out'"
+teardown
+
+# --- local AI context presets and ownership
+for bad in 1234 "" 16384 -1 '2048+2048' '$(touch /no-such-potato-file)'; do
+  ai_setup
+  [[ $bad == '$('* ]] && bad='$(touch '"$T/context-injected"')'
+  out=$(POTATO_AI_CTX="$bad" "$repo/bin/omarchy-potato-ai" enable --yes 2>&1); rc=$?
+  label=${bad:-empty}
+  check "ai rejects invalid env context ($label)" failed_with "$rc" "$out" POTATO_AI_CTX
+  check "ai context data is not executed ($label)" test ! -e "$T/context-injected"
+  check "ai invalid env context ($label) has no side effects" test ! -e "$AIST"
+  teardown
+done
+
+ai_setup
+POTATO_AI_CTX=8192 "$repo/bin/omarchy-potato-ai" enable --yes >/dev/null 2>&1; rc=$?
+check "ai enable persists env context 8192" bash -c "[ $rc -eq 0 ] && grep -qx 'ctx=8192' '$AIST/enabled'"
+"$repo/bin/omarchy-potato-ai" status >"$T/status" 2>&1
+check "ai status reports persisted context" grep -q '^context:     8192$' "$T/status"
+teardown
+
+ai_setup
+"$repo/bin/omarchy-potato-ai" enable </dev/null >/dev/null 2>&1; rc=$?
+check "ai enable noninteractive defaults to 2048" bash -c "[ $rc -eq 0 ] && grep -qx 'ctx=2048' '$AIST/enabled'"
+teardown
+
+ask_fake_server_setup() {
+  ai_setup
+  export FAKE_HEALTH_FILE=$T/health FAKE_SERVER_LOG=$T/server.log FAKE_SERVER_ARGS=$T/server.args
+  cat >"$T/fake-server" <<'S'
+#!/bin/bash
+printf '%s\n' "$$ $*" >>"$FAKE_SERVER_LOG"
+printf '%s\n' "$*" >"$FAKE_SERVER_ARGS"
+: >"$FAKE_HEALTH_FILE"
+while :; do sleep 0.2; done
+S
+  chmod +x "$T/fake-server"
+  mkdir -p "$AIST"
+  printf 'variant=x\nserver=%s\nmodel=%s\nctx=%s\n' "$T/fake-server" "$T/model.bin" "${1:-2048}" >"$AIST/enabled"
+}
+
+ask_fake_server_setup 1234
+out=$(POTATO_AI_NO_SERVER=1 "$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask rejects invalid persisted context" failed_with "$rc" "$out" "invalid context"
+check "ask invalid persisted context touches no stamp" test ! -e "$AIST/last-used"
+teardown
+
+ask_fake_server_setup 2048
+for bad in 1234 "" 16384 -1 '2048+2048' '$(touch /no-such-potato-file)'; do
+  [[ $bad == '$('* ]] && bad='$(touch '"$T/context-injected"')'
+  out=$(POTATO_AI_CTX="$bad" POTATO_AI_NO_SERVER=1 "$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+  label=${bad:-empty}
+  check "ask rejects invalid env context ($label)" failed_with "$rc" "$out" POTATO_AI_CTX
+  check "ask context data is not executed ($label)" test ! -e "$T/context-injected"
+done
+check "ask invalid env context touches no stamp" test ! -e "$AIST/last-used"
+teardown
+
+ask_fake_server_setup 2048
+out=$(POTATO_AI_CTX=8192 "$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask starts with env context override" [ $rc -eq 0 ] || echo "$out"
+check "ask uses env 8192 and q8 KV flags" bash -c "grep -q -- '-c 8192' '$T/server.args' && grep -q -- '-fa on -ctk q8_0 -ctv q8_0' '$T/server.args'"
+check "ask env override does not rewrite enabled context" grep -qx 'ctx=2048' "$AIST/enabled"
+pid1=$(sed -n 's/^pid=//p' "$AIST/server.meta")
+lines1=$(wc -l <"$T/server.log")
+POTATO_AI_CTX=8192 "$repo/bin/omarchy-potato-ask" --dry-run "hi" >/dev/null 2>&1; rc=$?
+pid2=$(sed -n 's/^pid=//p' "$AIST/server.meta")
+lines2=$(wc -l <"$T/server.log")
+check "ask reuses matching running server (succeeds)" [ $rc -eq 0 ]
+check "ask reuses matching running server (same pid)" [ "$pid1" = "$pid2" ]
+check "ask reuses matching running server (does not restart)" [ "$lines1" -eq "$lines2" ]
+out=$(POTATO_AI_CTX=4096 "$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask refuses a changed context while running" failed_with "$rc" "$out" "--stop"
+check "ask changed-context refusal leaves the server alive" bash -c "kill -0 $pid1"
+"$repo/bin/omarchy-potato-ask" --stop >/dev/null 2>&1
+sleep 0.3
+check "ask --stop stops a matching server" bash -c "! kill -0 $pid1 2>/dev/null"
+check "ask --stop removes owned metadata" bash -c "[ ! -e '$AIST/server.meta' ] && [ ! -e '$AIST/server.pid' ]"
+teardown
+
+ask_fake_server_setup 2048
+sed -i '/^ctx=/d' "$AIST/enabled"
+"$repo/bin/omarchy-potato-ai" status >"$T/status" 2>&1
+check "ai status marks legacy state as default 2048" grep -q '^context:     2048 (legacy default)$' "$T/status"
+"$repo/bin/omarchy-potato-ask" --dry-run "hi" >/dev/null 2>&1; rc=$?
+check "legacy enabled state starts with 2048" bash -c "[ $rc -eq 0 ] && grep -q -- '-c 2048' '$T/server.args'"
+"$repo/bin/omarchy-potato-ask" --stop >/dev/null 2>&1
+teardown
+
+ai_setup
+mkdir -p "$AIST"
+printf 'variant=x\nserver=%s\nmodel=%s\nctx=2048\n' "$T/fake-server" "$T/model.bin" >"$AIST/enabled"
+sleep 30 & victim=$!
+printf '%s\n' "$victim" >"$AIST/server.pid"
+out=$("$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask refuses a legacy live PID" failed_with "$rc" "$out" "legacy/unknown"
+check "ask leaves a legacy live PID alone" kill -0 "$victim"
+"$repo/bin/omarchy-potato-ask" --stop >/dev/null 2>&1; rc=$?
+check "--stop reports legacy live PID refusal" [ $rc -ne 0 ]
+check "--stop leaves a legacy live PID alone" kill -0 "$victim"
+kill "$victim" 2>/dev/null; wait "$victim" 2>/dev/null || true
+teardown
+
+ai_setup
+mkdir -p "$AIST"
+printf 'variant=x\nserver=%s\nmodel=%s\nctx=2048\n' "$T/fake-server" "$T/model.bin" >"$AIST/enabled"
+export FAKE_HEALTH_FILE=$T/health; : >"$FAKE_HEALTH_FILE"
+out=$("$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask refuses an unrelated healthy port" failed_with "$rc" "$out" "unverified"
+check "ask never accepts an unrelated healthy port" test ! -e "$AIST/server.meta"
+teardown
+
+ai_setup
+sleep 30 & victim=$!
+POTATO_AI_IDLE=0 POTATO_AI_WATCH_EVERY=0 timeout 5 "$repo/bin/omarchy-potato-ask" --watchdog "$victim" 999999999999 0000000000000000000000000000000000000000000000000000000000000000 >/dev/null 2>&1
+check "watchdog ignores a replacement process" kill -0 "$victim"
+kill "$victim" 2>/dev/null; wait "$victim" 2>/dev/null || true
+teardown
+
+# Duplicate persisted contexts must not be silently accepted, even with a valid last line.
+ask_fake_server_setup 1234
+printf 'ctx=2048\n' >>"$AIST/enabled"
+out=$(POTATO_AI_NO_SERVER=1 "$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask rejects duplicate persisted contexts" failed_with "$rc" "$out" "duplicate ctx="
+check "duplicate context refusal leaves timestamp untouched" test ! -e "$AIST/last-used"
+POTATO_AI_CTX=4096 POTATO_AI_NO_SERVER=1 "$repo/bin/omarchy-potato-ask" --dry-run "hi" >/dev/null 2>&1; rc=$?
+check "valid env overrides malformed persisted context" [ $rc -eq 0 ]
+teardown
+
+# The enable smoke must check the selected preset, not a smaller unrelated context.
+ai_setup
+POTATO_AI_CTX=8192 "$repo/bin/omarchy-potato-ai" enable --yes >/dev/null 2>&1; rc=$?
+check "8192 smoke uses selected context and q8 KV" bash -c "[ $rc -eq 0 ] && grep -q 'llama-server .* -c 8192 .* -fa on -ctk q8_0 -ctv q8_0' '$STUBLOG'"
+POTATO_AI_CTX=16384 "$repo/bin/omarchy-potato-ai" enable --yes >/dev/null 2>&1; rc=$?
+check "invalid enable preserves previously saved context" bash -c "[ $rc -ne 0 ] && grep -qx ctx=8192 '$AIST/enabled'"
+"$repo/bin/omarchy-potato-ai" enable --yes </dev/null >/dev/null 2>&1; rc=$?
+check "noninteractive re-enable resets saved choice to 2048" bash -c "[ $rc -eq 0 ] && grep -qx ctx=2048 '$AIST/enabled'"
+check "2048 smoke also uses q8 KV" grep -q 'llama-server .* -c 2048 .* -fa on -ctk q8_0 -ctv q8_0' "$STUBLOG"
+teardown
+
+# Exercise the actual TTY branch; util-linux also supplies the runtime's flock.
+if command -v script >/dev/null 2>&1; then
+  for choice in 4096 8192 cancel; do
+    ai_setup
+    cat >"$T/stubs/gum" <<'S'
+#!/bin/bash
+echo "gum $*" >>"$STUBLOG"
+if [[ $1 == choose ]]; then
+  [[ $FAKE_CTX_CHOICE == cancel ]] && exit 130
+  printf '%s\n' "$FAKE_CTX_CHOICE"
+fi
+exit 0
+S
+    export FAKE_CTX_CHOICE=$choice
+    script -qec "$repo/bin/omarchy-potato-ai enable" /dev/null </dev/null >"$T/interactive.log" 2>&1; rc=$?
+    if [[ $choice == cancel ]]; then
+      check "interactive cancellation leaves AI state untouched" bash -c "[ $rc -eq 0 ] && [ ! -e '$AIST' ]"
+    else
+      check "interactive choice $choice persists" bash -c "[ $rc -eq 0 ] && grep -qx ctx=$choice '$AIST/enabled'"
+      check "interactive menu lists only supported presets with 2 GB recommendation" grep -q 'gum choose --header Context size (2048 recommended for 2 GB; larger is slower) 2048 4096 8192$' "$STUBLOG"
+    fi
+    unset FAKE_CTX_CHOICE
+    teardown
+  done
+else
+  not_ok "interactive context tests require util-linux script"
+fi
+
+# Live PID with stale full metadata must be preserved even if its port is unhealthy.
+ask_fake_server_setup 2048
+sleep 30 & victim=$!
+printf 'format=1\npid=%s\nstarttime=999999999999\ncmdline_sha256=%064d\n' "$victim" 0 >"$AIST/server.meta"
+printf '%s\n' "$victim" >"$AIST/server.pid"
+before=$(cat "$AIST/server.meta")
+out=$("$repo/bin/omarchy-potato-ask" --dry-run "hi" 2>&1); rc=$?
+check "ask refuses stale full metadata for a live PID" failed_with "$rc" "$out" "identity no longer matches"
+check "stale live identity preserves metadata and starts nothing" bash -c "[ \"\$(cat '$AIST/server.meta')\" = '$before' ] && [ ! -e '$T/server.log' ]"
+"$repo/bin/omarchy-potato-ask" --stop >/dev/null 2>&1; rc=$?
+check "stop refuses stale full metadata without killing unrelated PID" bash -c "[ $rc -ne 0 ] && kill -0 $victim"
+mkdir -p "$XDG_DATA_HOME/potato-mode/ai"
+touch "$XDG_DATA_HOME/potato-mode/ai/keep"
+"$repo/bin/omarchy-potato-ai" disable --dry-run >/dev/null 2>&1; rc=$?
+check "AI disable dry-run leaves running process and files alone" bash -c "[ $rc -eq 0 ] && kill -0 $victim && [ -f '$AIST/enabled' ] && [ -f '$XDG_DATA_HOME/potato-mode/ai/keep' ]"
+"$repo/bin/omarchy-potato-ai" disable >/dev/null 2>&1; rc=$?
+check "AI disable preserves files when process ownership is unverified" bash -c "[ $rc -ne 0 ] && kill -0 $victim && [ -f '$AIST/enabled' ] && [ -f '$XDG_DATA_HOME/potato-mode/ai/keep' ]"
+kill "$victim" 2>/dev/null; wait "$victim" 2>/dev/null || true
 teardown
 
 # --- potato-ask
